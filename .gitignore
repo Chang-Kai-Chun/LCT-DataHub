@@ -2,3 +2,6 @@
 # 工作資料與輸出
 data/*
 !data/.gitkeep
+*.pyc
+__pycache__/
+*.py[cod]
