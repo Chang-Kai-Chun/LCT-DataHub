@@ -65,6 +65,34 @@ class GroupMode(Enum):
     AUTO = "自動"  # 每 4 個樣品一組，餘數放最後一組
 
 
+class DirectionMode(Enum):
+    """Box 圖取用的方向（A-2）。"""
+
+    FW = "FW"
+    RV = "RV"
+    BOTH = "FW＋RV"
+    PER_SAMPLE = "逐樣品選擇"  # 進階：每個樣品各自指定 FW 或 RV
+
+
+class BoxColumn(Enum):
+    """Box 表中，參數以外的欄位名稱（其餘欄位沿用 TableColumn）。"""
+
+    CONDITION = "Condition"
+    KEEP = "Keep"  # True 表示該筆數值保留在 Box 圖中
+
+
+# 可用數值範圍篩選的參數（Rsh 不篩選）
+BOX_FILTER_PARAMS = (JVParam.PCE, JVParam.VOC, JVParam.JSC, JVParam.FF)
+
+
+@dataclass(frozen=True)
+class ValueRange:
+    """單一參數的篩選範圍；None 表示該端不限制。"""
+
+    minimum: float | None = None
+    maximum: float | None = None
+
+
 class GroupingError(ValueError):
     """分組設定不合理（名稱重複、樣品重複歸組、條件數不合等）時拋出。"""
 

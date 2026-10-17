@@ -13,7 +13,7 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 > - **新專案會讀取這個筆記庫，本檔與相關公式筆記是新專案作業的核心依據**。新專案做出的決定（例如路徑）要回寫到本檔。
 > - 實際程式由新專案的其他 session 撰寫；這份文件負責「說明與設計的依據」，程式依據公式筆記實作，筆記更新時回頭修改這裡。
 > - 標 `舊` 是 V5 已有、V6 繼承的功能；標 `新` 是 V6 新增；標 `暫緩` 是筆記有公式、V5 沒有實作，**第一版暫時不做**。
-> - 最後更新：2026-10-16。
+> - 最後更新：2026-10-17。
 
 ## 第一部分　版本總覽
 
@@ -28,6 +28,36 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 
 > [!note] 版本說明
 > 你稱舊版為「DataHub version 5」；程式裡的名稱是「LCT 數據整合軟體」，介面徽章顯示 **V5.4**。本文把它記為 V5。
+
+---
+
+### 開發進度總覽（2026-10-17）
+
+| 區 | 核心（`core/`） | 說明 |
+| --- | --- | --- |
+| **A　JV** | **暫時完成**（98 個 pytest 通過） | A-1 整合、A-2 Box 圖、A-3 JV 曲線的核心與繪圖都已完成；UI／API 尚未開始（見 3-5） |
+| B　暗電流 | 未開始 | 只有 `types.py` |
+| C　EQE | 未開始 | 只有 `types.py` |
+| D　Noise | 未開始 | 只有 `types.py` |
+| E　衍生指標 | 暫緩 | |
+| F　色票 | 未開始 | 繪圖暫用 `plotting.py` 內建色盤 |
+| G　裝置紀錄與工作資料夾 | 未開始 | |
+
+**A 區已完成的內容**
+- **A-1 JV 整合**：檔名解析與失敗檢查、CSV 讀取（依表頭辨識欄位）、有效面積檢查與改用指定面積重算、樣品分組（平均／自訂／自動／手動）、整合與 Excel 輸出（ALL_Data、五張參數 sheet、每檔 sheet）
+- **A-2 Box 圖**（`jv/box.py`）：`build_box_table`（FW／RV／FW＋RV／逐樣品方向）→ `apply_ranges`（PCE、Voc、Jsc、FF 範圍篩選，可略過）→ `set_keep`（手動 True／False）→ `box_data`（依條件整理）
+- **A-3 JV 曲線**（`jv/curve.py`）：`available_samples`、`select_curves`（依樣品與方向挑曲線）；FW 實線、RV 虛線；Y 軸預設 −40 到 10，可調
+- **繪圖**（`plotting.py`）：`plot_jv_curves`、`plot_box`（皆可設 Y 軸範圍）、`figure_to_png`
+  - 全部圖使用 **Arial**，標題與 X、Y 軸標籤粗體
+  - Box 圖為 Origin 風格：空心 box、每個條件一色（洋紅、紅、綠、藍…）、粗框、刻度朝內
+  - Box 圖數據點為**有高光的球體符號**（向量疊層，`scatter_spheres`，大小 `BOX_POINT_SIZE = 32`）
+  - JV 曲線圖例放圖外右側，曲線多時自動分欄
+- **實測**：以 `JV_test_file`（18 個 CSV）執行 `scripts/run_a_demo.py`，輸出 `Result/A/`（ALL_Data.xlsx、Box 圖 10 張、JV 曲線圖 4 張）
+
+**A 區尚未完成**
+- UI／API（上傳、有效面積彈窗、拖拉分組、Box 的 True／False map、曲線勾選預覽、Y 軸輸入、下載）：記在 3-5
+- ALL_Data 排版的視覺效果（粗框、合併、紅字）需 Gino 開 Excel 核對
+- Box 圖以實際條件名稱分組（核心已支援，UI 傳入名稱即可）
 
 ---
 
@@ -458,8 +488,8 @@ lct_datahub/
       grouping.py        #   A-1 樣品分組（平均／自訂／自動／手動拖拉）
       area.py            #   A-1 改用指定有效面積並重算
       export.py          #   A-1 寫 Excel（ALL_Data 排版、參數 sheet、每檔 sheet）
-      box.py             #   A-2
-      curve.py           #   A-3
+      box.py             #   A-2 Box 表、範圍篩選、True／False、依條件整理
+      curve.py           #   A-3 依樣品與方向挑曲線（FW 實線、RV 虛線）
     dark_current/        # B 區（types.py，解析器日後加入）
     eqe/                 # C 區（含 old / pdqe 兩個解析器）
     noise/               # D 區
@@ -505,13 +535,13 @@ lct_datahub/
 | 7 | 條件中列出、但找不到檔案的樣品：提示使用者（`missing_samples`） | `核心已完成` |
 | 8 | 下載整合 Excel（`write_excel`，版面見 A-1「Excel 版面」） | `核心已完成` |
 
-**A-2　Box 圖**（核心 `box.py` 尚未做，`待核心`）
+**A-2　Box 圖**（核心 `box.py`、`plotting.plot_box` 已完成，`核心已完成`；函式：`build_box_table`、`apply_ranges`、`set_keep`、`box_data`）
 - 數值範圍篩選輸入：PCE、Voc、Jsc、FF 的最小與最大值，留空表示不限制；整段可略過
 - 流程：先篩選 → 顯示篩選結果給使用者確認 → 再選擇是否用 **map 顯示 True／False**，手動勾選要保留的數值
 - 取用方向選項：FW、RV、FW＋RV；進階：逐樣品選 FW 或 RV
 - 預覽圖與下載 PNG
 
-**A-3　JV 曲線**（核心 `curve.py`、`plotting.py` 尚未做，`待核心`）
+**A-3　JV 曲線**（核心 `curve.py`、`plotting.plot_jv_curves` 已完成，`核心已完成`；函式：`available_samples`、`select_curves`、`figure_to_png`）
 - 勾選樣品清單（全選、全消）、FW／RV 方向切換；FW 實線、RV 虛線
 - Y 軸範圍輸入（預設 −40 到 10 mA/cm²）；疊圖；預覽與下載 PNG
 
@@ -644,6 +674,10 @@ lct_datahub/
 | 2026-10-16 | ALL_Data 版面 | 沿用 V5 區塊樣式；每個條件一個列帶，橫向放全部樣品（不限 4 個）；紅字標各區塊最高效率；每檔 sheet 為 Volt＋各 Pixel 的 J＋Sample ID 參數表，以原檔名命名 |
 | 2026-10-16 | package 結構 | A–D 大項目各一個子套件與一個 `types.py`，子項目共用；跨功能型別放頂層 |
 | 2026-10-16 | 程式碼規則 | docstring、註解、Enum 與 class；core 同步、api 用 `asyncio.to_thread` |
+| 2026-10-17 | 繪圖字體 | 全部圖使用 Arial；標題與 X、Y 軸標籤粗體 |
+| 2026-10-17 | Box 圖樣式 | Origin 風格（空心 box、條件色、粗框、刻度朝內）；數據點用有高光的球體（向量疊層，大小 32） |
+| 2026-10-17 | Box 與曲線的 Y 軸 | 由前端傳入範圍，預設自動（JV 曲線預設 −40 到 10）；核心只接收參數 |
+| 2026-10-17 | A 區進度 | 核心暫時完成，之後做 UI／API 時再補細節 |
 
 ### 6-3　仍待確認
 1. **裝置紀錄 md 的資料夾路徑**：由新專案決定；決定後請把實際路徑寫回這裡，作為本專案的紀錄
