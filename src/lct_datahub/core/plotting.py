@@ -12,6 +12,8 @@ from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
 from matplotlib.transforms import ScaledTranslation
 
+from lct_datahub.core.dark_current.types import DarkColumn, DarkCurve
+from lct_datahub.core.eqe.types import EqeColumn, EqeCurve
 from lct_datahub.core.jv.curve import DEFAULT_Y_RANGE, CurveLine
 from lct_datahub.core.jv.types import JVParam
 
@@ -184,6 +186,190 @@ def plot_box(
     for spine in ax.spines.values():
         spine.set_linewidth(1.5)
     fig.tight_layout()
+    return fig
+
+
+# 暗電流圖：偏移註記（紅框、黑字、斜體、粗體）放在右上角
+SHIFT_NOTE_TEXT = "shift"
+
+
+def _add_shift_note(ax: Axes) -> None:
+    """在座標軸右上角加上 shift 註記：紅框、黑字、斜體、粗體。"""
+    ax.text(
+        0.97, 0.96, SHIFT_NOTE_TEXT, transform=ax.transAxes, ha="right", va="top",
+        color="black", fontstyle="italic", fontweight="bold", fontsize=12, zorder=5,
+        bbox={"boxstyle": "square,pad=0.35", "facecolor": "white", "edgecolor": "red", "linewidth": 1.8},
+    )
+
+
+@_styled
+def plot_dark_current(
+    curves: list[DarkCurve],
+    y_range: tuple[float, float] | None = None,
+    x_range: tuple[float, float] | None = None,
+    colors: tuple[str, ...] = DEFAULT_COLORS,
+) -> Figure:
+    """畫暗電流疊圖：X 為電壓 (V)，Y 為 |J| (A/cm²)，對數座標。
+
+    只要有一條曲線被偏移過（B-2），右上角就加 shift 註記。
+    y_range、x_range 為 (下限, 上限)，None 表示自動；下限需小於上限，Y 軸（對數）下限需大於 0，否則拋出 ValueError。
+    J 為 0 的點無法在對數座標顯示，會略過。
+    """
+    for name, rng in (("X", x_range), ("Y", y_range)):
+        if rng is not None and not rng[0] < rng[1]:
+            raise ValueError(f"{name} 軸下限必須小於上限")
+    if y_range is not None and y_range[0] <= 0:
+        raise ValueError("Y 軸為對數座標，下限必須大於 0")
+
+    fig, ax = _new_figure((6, 4.5))
+    for i, curve in enumerate(curves):
+        dens = curve.data[DarkColumn.J.value].abs().where(lambda s: s > 0)  # 0 無法取對數
+        ax.plot(
+            curve.data[DarkColumn.VOLTAGE.value], dens,
+            color=colors[i % len(colors)], linewidth=1.5, label=curve.name,
+        )
+    ax.set_yscale("log")
+    ax.set_xlabel("Voltage (V)")
+    ax.set_ylabel("|J| (A/cm²)")
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if y_range is not None:
+        ax.set_ylim(*y_range)
+    ax.axvline(0, color="black", linewidth=0.6)
+    if curves:
+        # 圖例放在圖外右側，曲線多時自動分欄（與 JV 曲線圖相同）
+        ax.legend(
+            fontsize=7, frameon=False, loc="upper left", bbox_to_anchor=(1.02, 1.0),
+            ncol=-(-len(curves) // LEGEND_ROWS),
+        )
+    if any(c.is_shifted for c in curves):
+        _add_shift_note(ax)
+    return fig
+
+
+def _check_range(name: str, rng: tuple[float, float] | None) -> None:
+    """檢查座標範圍：None 表示自動；否則下限需小於上限，否則拋出 ValueError。"""
+    if rng is not None and not rng[0] < rng[1]:
+        raise ValueError(f"{name} 軸下限必須小於上限")
+
+
+# EQE 圖：單一樣品時沿用 V5 配色（EQE 藍、積分電流紅），座標軸同色
+EQE_SINGLE_COLOR = "#0000FF"
+JSC_SINGLE_COLOR = "#FF0000"
+DEFAULT_EQE_RANGE = (0.0, 100.0)  # EQE 軸預設範圍（%）
+JSC_LINE_STYLE = "--"  # 多樣品時積分電流用虛線（EQE 用實線）
+
+
+def _legend_outside(ax: Axes, handles: list, labels: list[str], x_offset: float) -> None:
+    """把圖例放在圖外右側，曲線多時自動分欄；x_offset 為圖例左緣相對座標軸寬度的位置。"""
+    ax.legend(
+        handles, labels, fontsize=7, frameon=False, loc="upper left",
+        bbox_to_anchor=(x_offset, 1.0), ncol=-(-len(labels) // LEGEND_ROWS),
+    )
+
+
+def _color_axis(ax: Axes, side: str, color: str) -> None:
+    """把一側 Y 軸（座標線、刻度、標籤）設成指定顏色，用於單一樣品的雙軸圖。"""
+    ax.spines[side].set_color(color)
+    ax.tick_params(axis="y", colors=color)
+    ax.yaxis.label.set_color(color)
+
+
+@_styled
+def plot_eqe(
+    curves: list[EqeCurve],
+    x_range: tuple[float, float] | None = None,
+    eqe_range: tuple[float, float] | None = DEFAULT_EQE_RANGE,
+    jsc_range: tuple[float, float] | None = None,
+    show_jsc: bool = True,
+    colors: tuple[str, ...] = DEFAULT_COLORS,
+) -> Figure:
+    """C-2：畫 EQE 疊圖，EQE 用左 Y 軸、積分電流用右 Y 軸。
+
+    - 單一樣品：EQE 藍、積分電流紅（V5 配色），兩側座標軸與曲線同色
+    - 多個樣品：同一樣品同色，EQE 實線、積分電流虛線；圖例只列樣品名稱與線型說明
+    - show_jsc=False 時不畫右軸與積分電流
+    x_range 由使用者輸入，None 表示依數據自動；eqe_range 預設 0–100；jsc_range None 表示自動。
+    任何範圍的下限需小於上限，否則拋出 ValueError。
+    """
+    for name, rng in (("X", x_range), ("EQE", eqe_range), ("積分電流", jsc_range)):
+        _check_range(name, rng)
+
+    fig, ax = _new_figure((6, 4.5))
+    ax_jsc = ax.twinx() if show_jsc else None
+    single = len(curves) == 1
+    handles, labels = [], []
+    for i, curve in enumerate(curves):
+        wl = curve.data[EqeColumn.WAVELENGTH.value]
+        eqe_color = EQE_SINGLE_COLOR if single else colors[i % len(colors)]
+        (line,) = ax.plot(wl, curve.data[EqeColumn.EQE.value], color=eqe_color, linewidth=1.5)
+        handles.append(line)
+        labels.append(curve.name)
+        if ax_jsc is not None:
+            jsc_color = JSC_SINGLE_COLOR if single else eqe_color
+            jsc_style = "-" if single else JSC_LINE_STYLE  # 單一樣品已用顏色區分，不必虛線
+            ax_jsc.plot(wl, curve.data[EqeColumn.JSC.value], color=jsc_color, linestyle=jsc_style, linewidth=1.5)
+
+    ax.set_xlabel("Wavelength (nm)")
+    ax.set_ylabel("EQE (%)")
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if eqe_range is not None:
+        ax.set_ylim(*eqe_range)
+    if ax_jsc is not None:
+        ax_jsc.set_ylabel("Integrated Jsc (mA/cm²)", fontweight="bold")
+        if jsc_range is not None:
+            ax_jsc.set_ylim(*jsc_range)
+        else:
+            ax_jsc.set_ylim(bottom=0)  # 積分電流從 0 起算
+        if single:
+            _color_axis(ax, "left", EQE_SINGLE_COLOR)
+            _color_axis(ax_jsc, "right", JSC_SINGLE_COLOR)
+            ax_jsc.spines["left"].set_visible(False)  # 避免右軸圖層的左框線蓋掉藍色左軸
+        elif curves:
+            # 多樣品時另加兩個灰色項目說明線型
+            handles += [
+                ax.plot([], [], color="gray", linestyle="-")[0],
+                ax.plot([], [], color="gray", linestyle=JSC_LINE_STYLE)[0],
+            ]
+            labels += ["EQE", "Integrated Jsc"]
+    if curves:
+        # 有右軸時圖例要再往右，避開右軸刻度與標籤
+        _legend_outside(ax, handles, labels, 1.18 if ax_jsc is not None else 1.02)
+    return fig
+
+
+@_styled
+def plot_rplot(
+    curves: list[EqeCurve],
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    colors: tuple[str, ...] = DEFAULT_COLORS,
+) -> Figure:
+    """C-3：畫 R-plot 疊圖，X 為波長 (nm)、Y 為 SR (A/W)；每個樣品一色。
+
+    x_range、y_range 由使用者輸入，None 表示依數據自動（Y 軸自動時從 0 起算）；下限需小於上限，否則拋出 ValueError。
+    """
+    for name, rng in (("X", x_range), ("Y", y_range)):
+        _check_range(name, rng)
+
+    fig, ax = _new_figure((6, 4.5))
+    for i, curve in enumerate(curves):
+        ax.plot(
+            curve.data[EqeColumn.WAVELENGTH.value], curve.data[EqeColumn.SR.value],
+            color=colors[i % len(colors)], linewidth=1.5, label=curve.name,
+        )
+    ax.set_xlabel("Wavelength (nm)")
+    ax.set_ylabel("Responsivity (A/W)")
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if y_range is not None:
+        ax.set_ylim(*y_range)
+    else:
+        ax.set_ylim(bottom=0)
+    if curves:
+        h, l = ax.get_legend_handles_labels()
+        _legend_outside(ax, h, l, 1.02)
     return fig
 
 

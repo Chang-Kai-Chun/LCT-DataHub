@@ -31,13 +31,13 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 
 ---
 
-### 開發進度總覽（2026-10-17）
+### 開發進度總覽（2026-11-06）
 
 | 區 | 核心（`core/`） | 說明 |
 | --- | --- | --- |
 | **A　JV** | **暫時完成**（98 個 pytest 通過） | A-1 整合、A-2 Box 圖、A-3 JV 曲線的核心與繪圖都已完成；UI／API 尚未開始（見 3-5） |
-| B　暗電流 | 未開始 | 只有 `types.py` |
-| C　EQE | 未開始 | 只有 `types.py` |
+| B　暗電流 | **B-1、B-2、B-3 核心已完成**（133 個 pytest 通過） | 整合、最低點偏移、暗電流圖都已完成；UI／API 尚未開始；B-4 暫緩 |
+| C　EQE | **C-1、C-2、C-3 核心已完成**（166 個 pytest 通過） | 整合（兩種儀器）、EQE 加積分電流圖、R-plot 都已完成；UI／API 尚未開始 |
 | D　Noise | 未開始 | 只有 `types.py` |
 | E　衍生指標 | 暫緩 | |
 | F　色票 | 未開始 | 繪圖暫用 `plotting.py` 內建色盤 |
@@ -53,6 +53,22 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
   - Box 圖數據點為**有高光的球體符號**（向量疊層，`scatter_spheres`，大小 `BOX_POINT_SIZE = 32`）
   - JV 曲線圖例放圖外右側，曲線多時自動分欄
 - **實測**：以 `JV_test_file`（18 個 CSV）執行 `scripts/run_a_demo.py`，輸出 `Result/A/`（ALL_Data.xlsx、Box 圖 10 張、JV 曲線圖 4 張）
+
+**B 區已完成的內容（B-1 暗電流數據整合）**
+- 兩種儀器的解析器：**PD-QE**（tab 分隔 TXT，每樣品 5 欄，J 為 A/mm²）、**明志**（txt／csv／dat／xlsx，或副檔名 `.xls` 的 tab 文字；Excel 檔名須含 `_abs`）
+- **依內容判斷儀器**，不只看副檔名（明志的 `.xls` 其實是文字檔；測試檔名也可能被改過）
+- 單位統一為 **A/cm²**：PD-QE 的 J 乘 100 並取絕對值；I 保留正負號；面積 mm² 轉 cm²
+- **智慧截取**（`truncate.py`）：前 20 個電壓間隔的中位數當步距，間隔偏離步距超過 50%（下限 5 mV）就在該處截斷；NaN 點略過
+- 同名曲線自動加 `_2`、`_3`；面積整理成 `check_areas` 可用的格式；改用指定面積 `apply_dark_area`（J = \|I\| ÷ 面積，I 不變）
+- **明志檔內沒有面積**：由 \|I\|/J 的中位數反推（4 位有效數字，測試檔得 0.045）；`area_from_file = False`，UI 需提示使用者確認
+- Excel **依儀器各輸出一份**（`Dark_PD-QE.xlsx`、`Dark_明志.xlsx`），各含 `Combined`（每條曲線並排 `V_名稱`、`J_名稱`）加每條曲線一個 sheet
+- 舊版二進位 `.xls`：已安裝 `xlrd`（2026-10-30），暗電流與 EQE 共用 `core/excel_read.py` 讀取（xlsx 用 openpyxl、xls 用 xlrd，依檔頭判斷）；套件清單見 5-6
+- **實測**：`scripts/run_b_demo.py` 以 `JD_test_file`（PD-QE 57 條、明志 1 條，各 121 點）輸出 `Result/B/`
+
+**B 區尚未完成**
+- UI／API（有效面積確認、偏移二選一、曲線勾選預覽、X／Y 範圍輸入、下載）：記在 3-5
+- 明志只有單曲線一份測試檔；多檔批次與真正的 Excel 檔尚未用真檔驗證
+- UI／API（面積確認彈窗等）：記在 3-5
 
 **A 區尚未完成**
 - UI／API（上傳、有效面積彈窗、拖拉分組、Box 的 True／False map、曲線勾選預覽、Y 軸輸入、下載）：記在 3-5
@@ -360,23 +376,30 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 #### B. 暗電流
 來源：V5「PQ-QE 暗電流」`process_jd_logic`、「明志暗電流」`process_mingchi_logic`、「暗電流繪圖」`JDPreviewWindow`
 
-**B-1　暗電流數據整合　`舊`**
+**B-1　暗電流數據整合　`舊`　（核心已完成 2026-10-30）**
 - 兩種儀器格式（已確認，沒有第三種）：
   - **PD-QE**（tab 分隔 TXT，電流欄 `A/mm^2`）
   - **明志自行搭建的系統，搭配 Keithley 2636A**（V5 支援 txt、csv、dat、xlsx；Excel 檔名需含 `_abs`）
 - 智慧截取：依電壓步距截掉檔案尾端異常的資料
-- 輸出：`Combined` 加每個樣品一個 sheet
+- 輸出：`Combined` 加每個樣品一個 sheet；**依儀器各輸出一份檔案**
 - V6：**單位統一為 A/cm²**，有效面積依「全域規則」確認
 
-**B-2　最低點位置處理　`新`**
+**B-2　最低點位置處理　`新`　（核心已完成 2026-10-30，`shift.py`）**
+- 做法（已確認）：在**整條曲線**找 |J| 最低點，**只平移電壓軸**（V' = V − V_min），I、J 不動、不內插；偏移量記錄在曲線上；原始電壓保留，可隨時還原
+- Excel：偏移後 `Combined` 同時放原始電壓（`Vorig_`）與偏移後電壓（`V_`），每個樣品 sheet 多一欄 `Original Volt (V)`，另有 `Shift` sheet 記錄每條曲線的偏移量
+- 圖上註記 *shift*：**紅框、黑字、斜體、粗體**，放右上角（B-3 實作）；最低點本來就在 0 V（偏移量 0）的曲線不算被偏移
 - 使用者二選一：
   1. **將最低點位置偏移到 0 V**（圖右上角註記 *shift*）
   2. **保持原始不變**
 - V5 的偏移邏輯不一致（貴儀用 |J| 最小值，明志用 `min` 沒取絕對值），V6 統一使用 |J| 的最小值
 - 背景：最低點不在 0 V 的可能原因見 [[暗電流解析]]（交界點、儀器偏移、暫態效應、離子遷移）；筆記建議用不同掃描速率與正反掃驗證
 
-**B-3　暗電流圖　`舊`**
+**B-3　暗電流圖　`舊`　（核心已完成 2026-10-30）**
 - 對數座標預覽，勾選曲線，疊圖
+- 核心：`select.py`（`curve_names`、`select_dark_curves`，供勾選清單）、`plotting.py` 的 `plot_dark_current`
+- 圖：X 為電壓 (V)、Y 為 \|J\| (A/cm²)（對數）；Arial、粗體標籤；0 V 畫細黑線；圖例放右側、曲線多時分欄（與 JV 曲線圖相同）；J 為 0 的點略過
+- X、Y 範圍由前端傳入（預設自動）；Y 軸為對數，下限須大於 0
+- 有曲線被偏移才在右上角加 *shift*（紅框、黑字、斜體、粗體）
 
 **B-4　指定偏壓的暗電流取值　`暫緩`**
 - [[暗電流解析]] 建議取 **−0.1 V 或 −0.5 V** 的暗電流（0 V 會高估）
@@ -385,7 +408,7 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 #### C. EQE 與 R-plot
 來源：V5 `process_eqe_pd_logic`、`process_eqe_old_logic`、`EQEPreviewWindow`、`RplotPreviewWindow`
 
-**C-1　EQE 數據整合　`舊`**
+**C-1　EQE 數據整合　`舊`　（核心已完成 2026-10-30）**
 
 兩台儀器，積分電流的來源不同：
 
@@ -397,15 +420,28 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 - 舊型的 EQE 原始值是小數，乘 100 轉成 %
 - 舊型的樣品名自動編號 `S1、S2…`，存檔前可詢問是否命名
 - 舊型儀器的原始電流欄位本身就是 **mA/cm²**（2026-10-14 確認；先前誤記為 mA）。累積後直接得到積分電流密度（mA/cm²），**不除以有效面積，也不需要面積確認彈窗**，與 V5 程式碼行為一致
+- **實際檔案結構（2026-10-30 以測試檔確認）**
+  - **PD-QE TXT**：27 個樣品，每組 6 欄並排（波長、EQE (%)、SR (A/W)、Jsc 累積，其後兩欄為資訊的標籤與值）；資訊含 Name、Mode、Range、Volt. Bias、Date、Time、Comment，以及 AM1.5G／AM1.5D／AM0 三種光譜算出的 Jsc；波長 300–1100 nm，步距 5 nm，161 點
+  - **舊型 xls**：實際是沒有 OLE 包裝的 **BIFF 串流**（需 `xlrd` 才讀得了）；第 0 列為 X、Y 交替，每條曲線佔 2 欄；欄數 = 14 + 12 × 樣品數（第一組 14 欄是校正檔，多一條前導曲線）；每組內 EQE 在第 9 欄、SR 第 5 欄、波長第 8 欄、電流第 11 欄（0 起算，加上 12×組序）；組尾另有該樣品的 Jsc 單值（只用來驗證；實際使用的是我們自行累積的值，差異約百萬分之幾，可忽略）
+  - 驗證：EQE ≈ SR × 1240 ÷ 波長（兩種儀器皆成立）；舊型「電流 × 步距」累積的終點與檔內單值一致；PD-QE 積分電流終點與檔內 AM1.5G 的 Jsc 一致
+- 整合後欄位統一為：`Lambda (nm)`、`EQE (%)`、`SR (A/W)`、`Jsc (mA/cm^2)`（累積）；PD-QE 另保留測量時間、偏壓與各光譜的 Jsc
+- 儀器依檔案**內容**判斷，不看副檔名；同名樣品自動加 `_2`、`_3`；`rename_curves` 供舊型存檔前命名
+- Excel **依儀器各輸出一份**（`Eqe_PD-QE.xlsx`、`Eqe_Old.xlsx`）：`Combined`（波長加各樣品 EQE，依波長合併）、`Jsc`（每樣品一列，含各光譜的 Jsc）、每個樣品一個 sheet
 - 公式與觀念：[[EQE]]、[[響應度與量子效率]]
   - $R=\dfrac{I_{ph}}{P_{in}}=EQE\cdot\dfrac{e\lambda}{hc}$（A/W）
 
-**C-2　EQE 曲線繪圖　`舊`**
-- EQE 用左 Y 軸、積分電流用右 Y 軸（V5：藍與紅）
-- 疊圖
+**C-2　EQE 曲線繪圖　`舊`　（核心已完成 2026-11-06，`plotting.plot_eqe`）**
+- EQE 用左 Y 軸、積分電流用右 Y 軸
+- 單一樣品：EQE 藍、積分電流紅（沿用 V5），兩側座標軸與曲線同色
+- 多個樣品疊圖：同一樣品同色，EQE 實線、積分電流虛線；圖例列樣品名稱，另加兩個灰色項目說明線型
+- **圖例不附 Jsc 數值**
+- X 軸範圍**由使用者輸入**（沒輸入就依數據自動，不設預設值）；EQE 軸預設 0–100；積分電流軸沒輸入時從 0 起自動
+- 右軸可關閉（`show_jsc=False`）
+- 曲線勾選：`eqe/select.py`（`curve_names`、`select_eqe_curves`）
 
-**C-3　R-plot（SR，A/W）　`舊`**
-- 波長對 SR（A/W）的曲線；疊圖
+**C-3　R-plot（SR，A/W）　`舊`　（核心已完成 2026-11-06，`plotting.plot_rplot`）**
+- 波長對 SR（A/W）的疊圖，每個樣品一色；直接使用整合後的 `SR (A/W)` 欄（兩台儀器檔內都有）
+- X、Y 範圍由使用者輸入，沒輸入就自動（Y 從 0 起）
 
 #### D. Noise
 來源：V5 `process_noise_guiyi_logic`、`process_noise_mingzhi_logic`、`draw_noise_in_origin`
@@ -490,8 +526,25 @@ lct_datahub/
       export.py          #   A-1 寫 Excel（ALL_Data 排版、參數 sheet、每檔 sheet）
       box.py             #   A-2 Box 表、範圍篩選、True／False、依條件整理
       curve.py           #   A-3 依樣品與方向挑曲線（FW 實線、RV 虛線）
-    dark_current/        # B 區（types.py，解析器日後加入）
-    eqe/                 # C 區（含 old / pdqe 兩個解析器）
+    dark_current/        # B 區
+      types.py           #   Enum、dataclass、例外（B-1、B-2、B-3 共用）
+      truncate.py        #   B-1 智慧截取
+      pdqe.py            #   B-1 PD-QE 解析
+      mingchi.py         #   B-1 明志解析
+      integrate.py       #   B-1 依內容判斷儀器、讀檔、同名編號、面積整理
+      area.py            #   B-1 改用指定有效面積並重算 J
+      export.py          #   B-1 依儀器各寫一份 Excel
+      shift.py           #   B-2 最低點偏移到 0 V（或保持原始）
+      select.py          #   B-3 依名稱挑出要畫的曲線（圖在 plotting.py）
+    naming.py            # 同名編號、Excel sheet 名稱清理（各功能共用）
+    excel_read.py        # 讀 Excel 成列的清單：xlsx（openpyxl）、舊版 xls（xlrd），依檔頭判斷（各功能共用）
+    eqe/                 # C 區
+      types.py           #   Enum、dataclass、例外（C-1、C-2、C-3 共用）
+      pdqe.py            #   C-1 新型 PD-QE TXT 解析
+      old.py             #   C-1 舊型（五樓）Excel 解析
+      integrate.py       #   C-1 依內容判斷儀器、讀檔、同名編號、改名
+      export.py          #   C-1 依儀器各寫一份 Excel
+      select.py          #   C-2、C-3 依名稱挑出要畫的曲線（圖在 plotting.py）
     noise/               # D 區
     metrics.py           # E 區（暫緩，第一版不做）
     palette.py           # F 區
@@ -546,8 +599,23 @@ lct_datahub/
 - Y 軸範圍輸入（預設 −40 到 10 mA/cm²）；疊圖；預覽與下載 PNG
 
 **其他功能的 UI（核心尚未開始）**
-- B 暗電流：有效面積確認；最低點位置「偏移到 0 V（圖右上註記 *shift*）／保持原始」二選一
-- C EQE：舊型 EQE 樣品名稱（預設 S1、S2…）存檔前詢問是否命名
+**B　暗電流**（核心已完成：`read_dark_files`、`shift_curves`、`select_dark_curves`、`plot_dark_current`、`write_dark_excels`）
+| # | 畫面內容 | 狀態 |
+| --- | --- | --- |
+| 1 | 上傳多個暗電流檔（txt、csv、dat、xlsx、xls；Excel 檔名須含 `_abs`，沒有就忽略）；依內容判斷儀器；失敗時顯示 `DarkFileError` 的檔名、原因、期望、實際並停止作業（`list_dark_files`、`read_dark_files`） | `核心已完成` |
+| 2 | **有效面積確認彈窗**：各檔面積不同時顯示面積值與對應檔案（`check_areas`、`dark_areas`）；選項「忽略並繼續」或「改為 ＿＿ cm²」，後者先顯示 `AREA_OVERRIDE_NOTICE`（J 會以 \|I\| ÷ 面積重算），確認後執行 `apply_dark_area`；**明志檔內沒有面積**（`area_from_file = False`，面積是反推的），須提示使用者確認 | `核心已完成` |
+| 3 | 最低點位置二選一：「偏移到 0 V」／「保持原始」（`ShiftMode`、`shift_curves`）；偏移時顯示各曲線的偏移量 | `核心已完成` |
+| 4 | 曲線勾選清單（全選、全消）、疊圖預覽；X、Y 範圍輸入（預設自動；Y 為對數，下限須大於 0）；預覽與下載 PNG（`curve_names`、`select_dark_curves`、`plot_dark_current`） | `核心已完成` |
+| 5 | 下載整合 Excel：依儀器各一份（`write_dark_excels`） | `核心已完成` |
+| 6 | 偏移時圖右上角 *shift* 註記可能壓到曲線尾端：可在偏移時自動把 Y 軸上限多留一個數量級（尚未決定） | 待決定 |
+
+**C　EQE**（C-1 核心已完成：`read_eqe_files`、`rename_curves`、`write_eqe_excels`）
+| # | 畫面內容 | 狀態 |
+| --- | --- | --- |
+| 1 | 上傳 EQE 檔（txt、xls、xlsx）；依內容判斷儀器；失敗時顯示 `EqeFileError` 的檔名、原因、期望、實際並停止作業（`list_eqe_files`、`read_eqe_files`） | `核心已完成` |
+| 2 | 舊型樣品名稱（預設 S1、S2…）存檔前詢問是否命名（`rename_curves`；空白、重複會拋出 `EqeNameError`） | `核心已完成` |
+| 3 | 下載整合 Excel：依儀器各一份（`write_eqe_excels`） | `核心已完成` |
+| 4 | C-2、C-3 的曲線勾選、疊圖、範圍輸入（X 軸由使用者輸入、EQE 軸預設 0–100）、右軸開關與 PNG 下載（`select_eqe_curves`、`plot_eqe`、`plot_rplot`、`figure_to_png`） | `核心已完成` |
 - D Noise：Dark I 與 $R_{sh}$ 輸入欄（沒輸入就不畫參考線）
 - F 色票：選 4–7 色、點色塊複製、預覽 JV 與 EQE 效果、下載色票
 - G-1 裝置紀錄：第一次連線時輸入或選擇裝置名稱；「我是既有裝置」綁定
@@ -622,7 +690,59 @@ lct_datahub/
 - A：可以
 - 相關：[[Git]]
 
-### 5-6　原筆記的開放問題現況
+### 5-6　依賴套件與環境重建（換電腦用）
+> [!important] 為什麼要記
+> 之後執行程式的電腦不會是現在這台（813 電腦、其他裝置）。**新增、移除或升級任何套件，都要同步更新本節**；套件一律用 uv 安裝，不用 pip。
+
+**環境**
+| 項目 | 內容 | 備註 |
+| --- | --- | --- |
+| Python | 3.13（`.python-version` 為 `3.13`；開發機為 3.13.7） | `pyproject.toml` 要求 `>=3.13`；uv 會自動下載對應版本 |
+| 套件管理 | **uv**（需先安裝 uv） | 版本由 `uv.lock` 鎖定，**`uv.lock` 要一起 commit** |
+| 作業系統 | 開發機為 Windows 11 | 程式用 `pathlib`，不寫死路徑分隔符號 |
+| 字體 | **Arial**（所有圖都指定 Arial） | 屬於作業系統字體，不是 Python 套件；Windows 內建。Linux／macOS 若沒有 Arial 會自動退回 DejaVu Sans，圖的字體會不同 |
+
+**專案本體 `lct-datahub`（`pyproject.toml` 的 `dependencies`）**
+| 套件 | 開發機版本 | 用途 | 使用位置 |
+| --- | --- | --- | --- |
+| `pandas` | 3.0.6 | 整合表、DataFrame、讀 xlsx | `core/` 全部 |
+| `numpy` | 2.5.4 | 數值運算（截取、偏移、累積） | `core/dark_current/`、`core/eqe/`、`core/plotting.py` |
+| `matplotlib` | 3.11.2 | 繪圖（只用 `Figure` 與 Agg 後端，不用 pyplot）、輸出 PNG | `core/plotting.py` |
+| `openpyxl` | 3.1.5 | 寫 Excel（`.xlsx`）、讀 xlsx、ALL_Data 排版 | `core/jv/export.py`、各 `export.py`、`core/excel_read.py` |
+| `xlrd` | 2.0.2 | **讀舊版 `.xls`**。舊型 EQE 儀器輸出的是沒有 OLE 包裝的 Excel BIFF 串流，openpyxl、pandas 都讀不了；也用於明志暗電流的舊版 xls。xlrd 2.x 只支援 xls，**不能讀 xlsx** | `core/excel_read.py`（2026-10-30 新增） |
+| `fastapi` | 0.143.0 | API 服務 | `api/`（尚未開始寫） |
+| `uvicorn[standard]` | 0.54.0 | 執行 FastAPI | `api/`（尚未開始寫） |
+| `python-multipart` | 0.0.32 | FastAPI 接收上傳檔案 | `api/`（尚未開始寫） |
+
+**開發用（`[dependency-groups] dev`）**
+| 套件 | 開發機版本 | 用途 |
+| --- | --- | --- |
+| `pytest` | 9.1.1 | 測試（`uv run pytest`） |
+| `httpx` | 0.28.1 | 測試 FastAPI |
+
+**前端 `front/`（workspace 成員，另有自己的 `pyproject.toml`）**
+| 套件 | 開發機版本 | 用途 |
+| --- | --- | --- |
+| `reflex` | 0.10.0 | 前端框架（`web/` 日後使用） |
+
+**標準庫以外、但不是自己安裝的**
+- `pillow`（12.3.0）等是 matplotlib、reflex 帶進來的間接依賴，不需要自己管；版本以 `uv.lock` 為準
+
+**在新電腦重建環境**
+1. 安裝 uv，並取得專案（`git clone`／`git pull`）
+2. 在專案根目錄執行 `uv sync --all-packages`（會依 `uv.lock` 裝好 Python 3.13 與全部套件，**含 `front` 的 reflex**）
+3. 執行 `uv run pytest` 確認環境正常（目前 158 個，測試資料資料夾不存在的測試會自動略過）
+4. 需要新套件：先告訴 Gino，再用 `uv add <套件>`（若要避免立刻同步，用 `uv add --no-sync <套件>` 後接著 `uv sync --all-packages`）；**不要只執行 `uv sync`**，它會把 `front` 的套件從共用 `.venv` 移除
+5. 新增套件後，更新本節的表格與版本
+
+**測試資料資料夾**（測試與示範腳本會用到；不在時測試自動略過，但示範腳本會失敗）
+- `JV_test_file/`（A 區）、`JD_test_file/`（B 區）、`EQE_test_file/`（C 區）：這三個資料夾要隨專案一起帶到新電腦（commit 或另外複製）
+- `Result/` 是輸出，已加入 `.gitignore`，不需要帶
+
+**選配、尚未使用**
+- Origin（`originpro`）：V5 用來繪圖；V6 以 matplotlib 為主，Origin 為選配，目前**沒有安裝也沒有使用**
+
+### 5-7　原筆記的開放問題現況
 | 問題 | 現況 |
 | --- | --- |
 | JV 檔案分組的輸入形式 | **已解決**：兩步驟輸入＋由檔名讀 Pixel 順序，不需要手動輸入測量順序 |
@@ -678,6 +798,20 @@ lct_datahub/
 | 2026-10-17 | Box 圖樣式 | Origin 風格（空心 box、條件色、粗框、刻度朝內）；數據點用有高光的球體（向量疊層，大小 32） |
 | 2026-10-17 | Box 與曲線的 Y 軸 | 由前端傳入範圍，預設自動（JV 曲線預設 −40 到 10）；核心只接收參數 |
 | 2026-10-17 | A 區進度 | 核心暫時完成，之後做 UI／API 時再補細節 |
+| 2026-10-30 | 暗電流 Excel 輸出 | 依儀器各輸出一份（`Dark_PD-QE.xlsx`、`Dark_明志.xlsx`），各含 `Combined` 加每條曲線一個 sheet；兩種儀器的總表統一叫 `Combined`（V5 明志叫 `ALL_data`） |
+| 2026-10-30 | 暗電流儀器判斷 | 依檔案內容判斷，不只看副檔名 |
+| 2026-10-30 | 明志有效面積 | 檔內沒有面積，由 \|I\|/J 反推（4 位有效數字）；UI 需讓使用者確認 |
+| 2026-10-30 | 舊版二進位 xls | 起初不裝 `xlrd`；C 區舊型 EQE 檔（原始 BIFF 串流的 .xls）確實需要，改為安裝 `xlrd 2.0.2`，暗電流同樣接上；讀取集中在 `core/excel_read.py` |
+| 2026-10-30 | 舊型 EQE 積分電流 | 用「電流 × 步距」自行累積，不採用檔內單獨記錄的 Jsc 值（兩者差百萬分之幾，可忽略）；累積第一點不是 0 的差異也忽略 |
+| 2026-10-30 | 套件記錄 | 所有依賴套件、版本、用途與換電腦的重建步驟記在 5-6；新增套件須同步更新；`numpy` 補寫進 `pyproject.toml`（原本只是間接依賴） |
+| 2026-10-30 | 暗電流偏移（B-2） | 整條曲線找 \|J\| 最低點，只平移電壓軸（不內插）；偏移量記錄；Excel 原始與偏移後電壓都放並加 Shift sheet；圖註記 *shift* 為紅框、黑字、斜體、粗體 |
+| 2026-10-30 | 暗電流圖（B-3） | 對數 Y 軸 \|J\| (A/cm²)、X 為電壓；0 V 細黑線；偏移才加 *shift* 註記；X、Y 範圍由前端傳入 |
+| 2026-10-30 | EQE 整合（C-1） | 兩種儀器依內容判斷；舊型跳過校正檔、樣品自動編號 S1…、EQE ×100、積分電流 = 電流 × 步距的累積；Excel 依儀器各輸出一份（`Combined`、`Jsc`、每樣品一個 sheet） |
+| 2026-10-30 | 共用函式 | 同名編號與 sheet 名稱清理抽成 `core/naming.py`，暗電流與 EQE 共用 |
+| 2026-10-30 | `Result/` | 加入 `.gitignore`（輸出檔不進版控） |
+| 2026-11-06 | EQE 圖（C-2） | 單一樣品 EQE 藍、積分電流紅；多樣品同樣品同色，EQE 實線、積分電流虛線；右軸可關閉；EQE 軸預設 0–100；**X 軸由使用者輸入，不設預設**；**圖例不附 Jsc** |
+| 2026-11-06 | R-plot（C-3） | 與 C-2 一起完成；直接用檔內 SR 欄 |
+| 2026-11-06 | *shift* 註記位置 | 可能壓到曲線尾端也沒關係，不自動調整 Y 軸 |
 
 ### 6-3　仍待確認
 1. **裝置紀錄 md 的資料夾路徑**：由新專案決定；決定後請把實際路徑寫回這裡，作為本專案的紀錄
