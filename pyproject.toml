@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 lct-datahub = "lct_datahub:main"
+lct-api = "lct_datahub.api.main:run"
 
 [build-system]
 requires = ["uv_build>=0.12.17,<0.13.0"]

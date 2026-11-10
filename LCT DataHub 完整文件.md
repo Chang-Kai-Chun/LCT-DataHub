@@ -41,7 +41,8 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 | D　Noise | 未開始 | 只有 `types.py` |
 | E　衍生指標 | 暫緩 | |
 | F　色票 | 未開始 | 繪圖暫用 `plotting.py` 內建色盤 |
-| G　裝置紀錄與工作資料夾 | 未開始 | |
+| G　裝置紀錄與工作資料夾 | **G-2 工作資料夾已完成**（`api/jobs.py`）；G-1 未開始 | |
+| **API（FastAPI）** | **A、B、C 路由已完成**（175 個 pytest 通過） | 21 個路由，見 3-6；`uv run lct-api` 啟動；Reflex 畫面尚未開始 |
 
 **A 區已完成的內容**
 - **A-1 JV 整合**：檔名解析與失敗檢查、CSV 讀取（依表頭辨識欄位）、有效面積檢查與改用指定面積重算、樣品分組（平均／自訂／自動／手動）、整合與 Excel 輸出（ALL_Data、五張參數 sheet、每檔 sheet）
@@ -550,7 +551,13 @@ lct_datahub/
     palette.py           # F 區
     activity_log.py      # G-1
     workspace.py         # G-2
-  api/                   # FastAPI：一個服務，多個路由
+  api/                   # FastAPI：一個服務，多個路由（見 3-6）
+    main.py              #   create_app、run（uv run lct-api）
+    config.py            #   工作資料夾根目錄、host、port（可用環境變數覆寫）
+    jobs.py              #   G-2 工作資料夾：建立、取得、設定讀寫
+    errors.py            #   core 例外 → HTTP 回應（422／400／404）
+    common.py            #   上傳、PNG、下載回應、共用資料模型
+    routes/              #   jv.py（A）、dark.py（B）、eqe.py（C）
   web/                   # Reflex
 ```
 - **大項目（A、B、C、D）各有一個子套件與一個 `types.py`**；同一大項目內的子項目（例如 A-1、A-2、A-3）共用該 `types.py` 的 Enum 與 dataclass
@@ -621,6 +628,36 @@ lct_datahub/
 - G-1 裝置紀錄：第一次連線時輸入或選擇裝置名稱；「我是既有裝置」綁定
 
 ---
+
+### 3-6　API 路由（FastAPI，2026-11-06）
+- 啟動：`uv run lct-api`（監聽 `0.0.0.0:8000`）；互動文件：`http://<主機>:8000/docs`
+- 路由都是 `async def`，同步工作以 `asyncio.to_thread()` 交給執行緒
+- 流程：上傳建立工作 → 回傳 `job_id` → 之後的請求都帶 `job_id`
+- 圖一律回傳 PNG；Excel 只有一份時直接下載，依儀器有兩份時打包成 zip
+
+| 區 | 方法與路徑（前綴 `/api`） | 用途 |
+| --- | --- | --- |
+| 共用 | `GET /health` | 確認 API 在線 |
+| A | `POST /jv/jobs` | 上傳 JV CSV（只接受 .csv，其他列在 `skipped`）；回傳檔案、樣品、面積檢查 |
+| A | `GET /jv/jobs/{id}` | 工作內容（含已確認分組與缺檔清單 `missing`） |
+| A | `PUT /jv/jobs/{id}/area` | 面積確認：`null` 忽略並繼續；數值重算 J、Jsc、PCE |
+| A | `POST /jv/jobs/{id}/grouping/preview` | 平均分配／自訂／自動預填（不存檔），給拖拉畫面 |
+| A | `PUT /jv/jobs/{id}/conditions` | 確認分組（全部樣品須分配） |
+| A | `GET /jv/jobs/{id}/excel?directions=FW&directions=RV` | 下載 ALL_Data.xlsx |
+| A | `POST /jv/jobs/{id}/box/table` | Box 表（方向、範圍篩選、手動保留） |
+| A | `POST /jv/jobs/{id}/box/plot` | 單一參數 Box 圖 |
+| A | `POST /jv/jobs/{id}/curves/plot` | JV 曲線疊圖 |
+| B | `POST /dark/jobs` | 上傳暗電流檔；回傳曲線、面積檢查 |
+| B | `GET /dark/jobs/{id}` | 工作內容 |
+| B | `PUT /dark/jobs/{id}/settings` | 指定面積、最低點處理（保持原始／偏移到 0 V） |
+| B | `GET /dark/jobs/{id}/excel` | 下載 Excel（依儀器） |
+| B | `POST /dark/jobs/{id}/plots/dark` | 暗電流圖 |
+| C | `POST /eqe/jobs` | 上傳 EQE 檔；回傳樣品與 Jsc |
+| C | `GET /eqe/jobs/{id}` | 工作內容 |
+| C | `PUT /eqe/jobs/{id}/names` | 改名（原名 → 新名，送完整對照） |
+| C | `GET /eqe/jobs/{id}/excel` | 下載 Excel（依儀器） |
+| C | `POST /eqe/jobs/{id}/plots/eqe` | C-2 EQE 加積分電流圖 |
+| C | `POST /eqe/jobs/{id}/plots/rplot` | C-3 R-plot |
 
 ## 第四部分　V5 → V6 功能對照
 
@@ -710,9 +747,9 @@ lct_datahub/
 | `matplotlib` | 3.11.2 | 繪圖（只用 `Figure` 與 Agg 後端，不用 pyplot）、輸出 PNG | `core/plotting.py` |
 | `openpyxl` | 3.1.5 | 寫 Excel（`.xlsx`）、讀 xlsx、ALL_Data 排版 | `core/jv/export.py`、各 `export.py`、`core/excel_read.py` |
 | `xlrd` | 2.0.2 | **讀舊版 `.xls`**。舊型 EQE 儀器輸出的是沒有 OLE 包裝的 Excel BIFF 串流，openpyxl、pandas 都讀不了；也用於明志暗電流的舊版 xls。xlrd 2.x 只支援 xls，**不能讀 xlsx** | `core/excel_read.py`（2026-10-30 新增） |
-| `fastapi` | 0.143.0 | API 服務 | `api/`（尚未開始寫） |
-| `uvicorn[standard]` | 0.54.0 | 執行 FastAPI | `api/`（尚未開始寫） |
-| `python-multipart` | 0.0.32 | FastAPI 接收上傳檔案 | `api/`（尚未開始寫） |
+| `fastapi` | 0.143.0 | API 服務 | `api/` |
+| `uvicorn[standard]` | 0.54.0 | 執行 FastAPI | `api/main.py`（`uv run lct-api`） |
+| `python-multipart` | 0.0.32 | FastAPI 接收上傳檔案 | `api/routes/` |
 
 **開發用（`[dependency-groups] dev`）**
 | 套件 | 開發機版本 | 用途 |
@@ -812,6 +849,10 @@ lct_datahub/
 | 2026-11-06 | EQE 圖（C-2） | 單一樣品 EQE 藍、積分電流紅；多樣品同樣品同色，EQE 實線、積分電流虛線；右軸可關閉；EQE 軸預設 0–100；**X 軸由使用者輸入，不設預設**；**圖例不附 Jsc** |
 | 2026-11-06 | R-plot（C-3） | 與 C-2 一起完成；直接用檔內 SR 欄 |
 | 2026-11-06 | *shift* 註記位置 | 可能壓到曲線尾端也沒關係，不自動調整 Y 軸 |
+| 2026-11-06 | API 狀態保存 | 每次上傳一個工作資料夾（`data/jobs/<功能>/<工作編號>/`，含 raw、output、meta.json、settings.json）；每個請求從 raw 重讀再套用 settings（讀檔結果有記憶體快取），服務重啟不遺失 |
+| 2026-11-06 | Box 表狀態 | 不存在伺服器：前端每次送出方向、範圍、手動保留，伺服器重算 |
+| 2026-11-06 | API 錯誤格式 | 檔案問題 422（`kind`=file，附 filename、reason、expected、actual）；輸入問題 400（`kind`=input）；找不到工作 404 |
+| 2026-11-06 | API port | FastAPI 8000（Reflex 後端 8001、前端 3000）；工作資料夾、host、port 可用環境變數 `LCT_WORK_ROOT`、`LCT_API_HOST`、`LCT_API_PORT` 覆寫 |
 
 ### 6-3　仍待確認
 1. **裝置紀錄 md 的資料夾路徑**：由新專案決定；決定後請把實際路徑寫回這裡，作為本專案的紀錄
