@@ -1,36 +1,12 @@
-"""Welcome to Reflex! This file outlines the steps to create a basic app."""
+"""LCT DataHub 前端（Reflex）進入點。
 
+前端只透過 HTTP 呼叫 FastAPI（預設 http://127.0.0.1:8000，可用環境變數 LCT_API_URL 覆寫），
+不直接 import lct_datahub（完整文件 3-4）。
+啟動：先在專案根目錄 uv run lct-api，再於 front/ 執行 uv run reflex run。
+"""
 import reflex as rx
 
-from rxconfig import config
+# 匯入頁面模組時，@rx.page 會自動註冊頁面
+from front.pages import home, jv  # noqa: F401
 
-
-class State(rx.State):
-    """The app state."""
-
-
-def index() -> rx.Component:
-    # Welcome Page (Index)
-    return rx.container(
-        rx.color_mode.button(position="top-right"),
-        rx.vstack(
-            rx.heading("Welcome to Reflex!", size="9"),
-            rx.text(
-                "Get started by editing ",
-                rx.code(f"{config.app_name}/{config.app_name}.py"),
-                size="5",
-            ),
-            rx.link(
-                rx.button("Check out our docs!"),
-                href="https://reflex.dev/docs/getting-started/introduction/",
-                is_external=True,
-            ),
-            spacing="5",
-            justify="center",
-            min_height="85vh",
-        ),
-    )
-
-
-app = rx.App()
-app.add_page(index)
+app = rx.App()  # 主題設定在 rxconfig.py 的 RadixThemesPlugin

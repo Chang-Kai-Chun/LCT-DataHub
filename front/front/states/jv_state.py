@@ -1,0 +1,720 @@
+"""A 區 JV 的狀態：上傳 → 面積確認 → 分組 → Excel → Box 圖 → JV 曲線。
+
+伺服器（FastAPI）保存工作資料夾與已確認的設定；這裡只保存畫面需要的內容。
+Box 表狀態不存在伺服器（11/06 決定），每次由這裡送出方向、範圍、手動保留。
+所有 API 呼叫都是 async，失敗時開啟 ErrorState 的警告視窗。
+"""
+import base64
+from dataclasses import dataclass, field
+
+import reflex as rx
+
+from front import api_client as api
+from front.api_client import ApiError
+from front.enums import BOX_FILTER_PARAMS, BoxColumn, Direction, DirectionMode, ErrorKind, GroupMode, JVParam, JVTab
+from front.states.error_state import ErrorState
+
+UPLOAD_ID = "jv_upload"
+CSV_TYPE = "text/csv"
+EXCEL_NAME = "ALL_Data.xlsx"
+DEFAULT_Y_RANGE = ("-40", "10")  # JV 曲線 Y 軸預設（mA/cm²），與 core.jv.curve.DEFAULT_Y_RANGE 相同
+
+
+# ---------- 給 rx.foreach 使用的資料列 ----------
+@dataclass
+class FileRow:
+    """上傳檔案摘要的一列。"""
+
+    filename: str = ""
+    sample: str = ""
+    direction: str = ""
+    pixels: str = ""
+
+
+@dataclass
+class AreaRow:
+    """面積檢查：檔名與該檔出現的面積。"""
+
+    filename: str = ""
+    areas: str = ""
+
+
+@dataclass
+class GroupCond:
+    """分組畫面的一個條件框。"""
+
+    name: str = ""
+    samples: list[str] = field(default_factory=list)
+
+
+@dataclass
+class MissingRow:
+    """條件中列出、但找不到檔案的樣品與方向。"""
+
+    condition: str = ""
+    sample: str = ""
+    direction: str = ""
+
+
+@dataclass
+class BoxRow:
+    """Box 表的一列（數值已轉成顯示用文字）。"""
+
+    row: int = 0
+    condition: str = ""
+    sample: str = ""
+    direction: str = ""
+    pixel: str = ""
+    pce: str = ""
+    voc: str = ""
+    jsc: str = ""
+    ff: str = ""
+    rsh: str = ""
+    keep: bool = True
+
+
+# ---------- 小工具 ----------
+def _fmt(value) -> str:
+    """數值轉顯示文字（4 位有效數字）；None 顯示空白。"""
+    if value is None:
+        return ""
+    if isinstance(value, float):
+        return f"{value:.4g}"
+    return str(value)
+
+
+def _parse_float(text: str, label: str) -> float | None:
+    """把輸入框文字轉成數值；空白回傳 None，格式錯誤拋出 ValueError（訊息含欄位名稱）。"""
+    text = text.strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        raise ValueError(f"「{label}」必須是數值，目前輸入：{text}") from None
+
+
+def _png_data_url(data: bytes) -> str:
+    """PNG 內容轉成 data URL，直接給 rx.image 顯示，也可直接下載。"""
+    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+
+
+class JVState(ErrorState):
+    """JV 頁面的狀態（ErrorState 的子狀態，共用警告視窗）。"""
+
+    # 共用
+    tab: str = JVTab.UPLOAD.value
+    loading: bool = False
+
+    # 上傳與工作
+    job_id: str = ""
+    skipped: list[str] = []
+    files: list[FileRow] = []
+    samples: list[str] = []  # 依數字排序（API 已排序）
+
+    # 面積
+    area_uniform: bool = True
+    area_uniform_value: str = ""
+    area_values: list[str] = []
+    area_rows: list[AreaRow] = []
+    area_notice: str = ""
+    recomputed_params: list[str] = []
+    area_override: str = ""  # 已套用的指定面積；空白表示沿用檔內面積
+    area_confirmed: bool = False
+    area_dialog_open: bool = False
+    area_notice_open: bool = False
+    area_input: str = ""
+
+    # 分組
+    group_mode: str = GroupMode.EVEN.value
+    group_names: str = ""  # 平均分配／空白條件用：以逗號分隔的條件名稱
+    custom_text: str = ""  # 自訂用：每行「名稱: G1-G4, G7」
+    new_cond_name: str = ""
+    conditions: list[GroupCond] = []
+    unassigned: list[str] = []
+    selected_sample: str = ""
+    groups_confirmed: bool = False
+    missing: list[MissingRow] = []
+
+    # Excel
+    excel_fw: bool = True
+    excel_rv: bool = False
+
+    # Box 圖
+    box_mode: str = DirectionMode.FW.value
+    sample_dirs: dict[str, str] = {}  # 逐樣品選擇時：樣品 → FW／RV
+    range_min: dict[str, str] = {p.value: "" for p in BOX_FILTER_PARAMS}
+    range_max: dict[str, str] = {p.value: "" for p in BOX_FILTER_PARAMS}
+    keep_overrides: dict[str, bool] = {}  # 列號（字串）→ 手動保留
+    box_rows: list[BoxRow] = []
+    box_param: str = JVParam.PCE.value
+    box_ymin: str = ""
+    box_ymax: str = ""
+    box_png: str = ""
+
+    # JV 曲線
+    curve_selected: list[str] = []
+    curve_fw: bool = True
+    curve_rv: bool = False
+    curve_ymin: str = DEFAULT_Y_RANGE[0]
+    curve_ymax: str = DEFAULT_Y_RANGE[1]
+    curve_png: str = ""
+
+    # ---------- 計算屬性 ----------
+    @rx.var
+    def has_job(self) -> bool:
+        """已成功上傳並建立工作。"""
+        return self.job_id != ""
+
+    @rx.var
+    def ready(self) -> bool:
+        """已上傳且面積已確認，可以進行後續步驟。"""
+        return self.job_id != "" and self.area_confirmed
+
+    @rx.var
+    def can_confirm_groups(self) -> bool:
+        """所有樣品都分配完、且至少有一個條件，才能按確定（require_complete）。"""
+        return len(self.unassigned) == 0 and len(self.conditions) > 0
+
+    @rx.var
+    def kept_count(self) -> int:
+        """Box 表中保留的筆數。"""
+        return sum(1 for r in self.box_rows if r.keep)
+
+    # ---------- 分頁與輸入框 ----------
+    @rx.event
+    def set_tab(self, value: str) -> None:
+        """切換分頁。"""
+        self.tab = value
+
+    @rx.event
+    def set_area_input(self, value: str) -> None:
+        """面積輸入框。"""
+        self.area_input = value
+
+    @rx.event
+    def set_area_dialog_open(self, value: bool) -> None:
+        """面積視窗開關。"""
+        self.area_dialog_open = value
+
+    @rx.event
+    def set_group_mode(self, value: str) -> None:
+        """分組預填方式。"""
+        self.group_mode = value
+
+    @rx.event
+    def set_group_names(self, value: str) -> None:
+        """條件名稱（逗號分隔）。"""
+        self.group_names = value
+
+    @rx.event
+    def set_custom_text(self, value: str) -> None:
+        """自訂分組文字。"""
+        self.custom_text = value
+
+    @rx.event
+    def set_new_cond_name(self, value: str) -> None:
+        """新增條件的名稱。"""
+        self.new_cond_name = value
+
+    @rx.event
+    def set_excel_fw(self, value: bool) -> None:
+        """Excel 參數 sheet 是否含 FW。"""
+        self.excel_fw = value
+
+    @rx.event
+    def set_excel_rv(self, value: bool) -> None:
+        """Excel 參數 sheet 是否含 RV。"""
+        self.excel_rv = value
+
+    @rx.event
+    def set_box_mode(self, value: str) -> None:
+        """Box 取用方向；換方向後列號會改變，手動保留一併清除。"""
+        self.box_mode = value
+        self.keep_overrides = {}
+        self.box_rows = []
+        self.box_png = ""
+
+    @rx.event
+    def set_sample_dir(self, sample: str, value: str) -> None:
+        """逐樣品選擇：指定某樣品的方向。"""
+        self.sample_dirs = {**self.sample_dirs, sample: value}
+        self.keep_overrides = {}
+
+    @rx.event
+    def set_range_min(self, param: str, value: str) -> None:
+        """篩選下限。"""
+        self.range_min = {**self.range_min, param: value}
+
+    @rx.event
+    def set_range_max(self, param: str, value: str) -> None:
+        """篩選上限。"""
+        self.range_max = {**self.range_max, param: value}
+
+    @rx.event
+    def set_box_param(self, value: str) -> None:
+        """Box 圖的參數。"""
+        self.box_param = value
+        self.box_png = ""
+
+    @rx.event
+    def set_box_ymin(self, value: str) -> None:
+        """Box 圖 Y 軸下限。"""
+        self.box_ymin = value
+
+    @rx.event
+    def set_box_ymax(self, value: str) -> None:
+        """Box 圖 Y 軸上限。"""
+        self.box_ymax = value
+
+    @rx.event
+    def set_curve_fw(self, value: bool) -> None:
+        """JV 曲線是否畫 FW。"""
+        self.curve_fw = value
+
+    @rx.event
+    def set_curve_rv(self, value: bool) -> None:
+        """JV 曲線是否畫 RV。"""
+        self.curve_rv = value
+
+    @rx.event
+    def set_curve_ymin(self, value: str) -> None:
+        """JV 曲線 Y 軸下限。"""
+        self.curve_ymin = value
+
+    @rx.event
+    def set_curve_ymax(self, value: str) -> None:
+        """JV 曲線 Y 軸上限。"""
+        self.curve_ymax = value
+
+    # ---------- 工作內容 ----------
+    def _reset_job(self) -> None:
+        """清除目前工作（重新上傳或檔案錯誤停止作業時）。"""
+        self.reset()
+
+    def _apply_job(self, data: dict) -> None:
+        """把 API 回傳的工作內容（JVJobOut）填入狀態。"""
+        self.job_id = data["job_id"]
+        self.skipped = data.get("skipped", [])
+        self.samples = data["samples"]
+        self.files = [
+            FileRow(f["filename"], f["sample"], f["direction"], "".join(str(p) for p in f["pixels"]))
+            for f in data["files"]
+        ]
+
+        report = data["area_report"]
+        self.area_uniform = report["is_uniform"]
+        self.area_uniform_value = _fmt(report["uniform_value"])
+        self.area_values = [_fmt(v) for v in report["values"]]
+        self.area_rows = [
+            AreaRow(name, ", ".join(_fmt(v) for v in values)) for name, values in report["by_file"].items()
+        ]
+        self.area_notice = data["area_notice"]
+        self.recomputed_params = data["recomputed_params"]
+
+        settings = data["settings"]
+        self.area_override = _fmt(settings.get("area"))
+        conditions = settings.get("conditions")
+        self.groups_confirmed = bool(conditions)
+        if conditions:
+            self.conditions = [GroupCond(c["name"], list(c["samples"])) for c in conditions]
+            self.unassigned = []
+        self.missing = [MissingRow(m["condition"], m["sample"], m["direction"]) for m in data.get("missing", [])]
+
+        # 第一次載入時，JV 曲線預設全選、逐樣品方向預設 FW
+        if not self.curve_selected:
+            self.curve_selected = list(self.samples)
+        self.sample_dirs = {s: self.sample_dirs.get(s, Direction.FW.value) for s in self.samples}
+
+    def _handle_error(self, err: ApiError) -> None:
+        """顯示錯誤；檔案錯誤停止作業（清除工作）。"""
+        if err.kind is ErrorKind.FILE:
+            self._reset_job()
+        self._show_error(err)
+
+    # ---------- 上傳 ----------
+    @rx.event
+    async def handle_upload(self, files: list[rx.UploadFile]):
+        """上傳 JV CSV 建立新工作；面積不一致時開啟面積確認視窗。"""
+        if not files:
+            self._show_message("請先選擇檔案")
+            return
+        uploads = [(f.filename or f.name or "", await f.read()) for f in files]
+        self._reset_job()
+        self.loading = True
+        yield
+        try:
+            data = await api.upload("/jv/jobs", uploads, CSV_TYPE)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        self._apply_job(data)
+        # 面積一致就直接確認；不一致時讓使用者選擇
+        self.area_confirmed = self.area_uniform
+        self.area_dialog_open = not self.area_uniform
+        yield rx.clear_selected_files(UPLOAD_ID)
+
+    # ---------- 面積確認 ----------
+    @rx.event
+    def open_area_dialog(self) -> None:
+        """重新開啟面積視窗（例如想改用指定面積）。"""
+        self.area_input = self.area_override
+        self.area_dialog_open = True
+
+    @rx.event
+    async def area_ignore(self):
+        """忽略並繼續：沿用檔內面積（PUT area = null）。"""
+        try:
+            data = await api.put_json(f"/jv/jobs/{self.job_id}/area", {"area": None})
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        self._apply_job(data)
+        self.area_confirmed = True
+        self.area_dialog_open = False
+
+    @rx.event
+    def area_request_override(self) -> None:
+        """改用指定面積：先檢查輸入，再顯示「數據將被更動」警告。"""
+        try:
+            area = _parse_float(self.area_input, "面積")
+        except ValueError as exc:
+            self._show_message(str(exc))
+            return
+        if area is None or area <= 0:
+            self._show_message("面積必須是大於 0 的數值（cm²）")
+            return
+        self.area_notice_open = True
+
+    @rx.event
+    def area_cancel_notice(self) -> None:
+        """取消改面積。"""
+        self.area_notice_open = False
+
+    @rx.event
+    async def area_confirm_override(self):
+        """使用者確認警告後，套用指定面積（API 重算 J、Jsc、PCE）。"""
+        self.area_notice_open = False
+        try:
+            area = _parse_float(self.area_input, "面積")
+            data = await api.put_json(f"/jv/jobs/{self.job_id}/area", {"area": area})
+        except ValueError as exc:
+            self._show_message(str(exc))
+            return
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        self._apply_job(data)
+        self.area_confirmed = True
+        self.area_dialog_open = False
+        # 面積改變後，舊的圖與 Box 表都失效
+        self.box_rows, self.box_png, self.curve_png = [], "", ""
+
+    # ---------- 分組 ----------
+    def _names(self) -> list[str]:
+        """解析逗號分隔的條件名稱（去除空白）。"""
+        return [n.strip() for n in self.group_names.replace("，", ",").split(",") if n.strip()]
+
+    def _sorted(self, samples: list[str]) -> list[str]:
+        """依上傳時的樣品順序排序。"""
+        order = {s: i for i, s in enumerate(self.samples)}
+        return sorted(samples, key=lambda s: order.get(s, len(order)))
+
+    def _unconfirm(self) -> None:
+        """分組被修改後，需重新確認。"""
+        self.groups_confirmed = False
+        self.box_rows, self.box_png = [], ""
+
+    @rx.event
+    async def preview_grouping(self):
+        """依選擇的方式預填（不存檔），之後可再點選調整。"""
+        mode = GroupMode(self.group_mode)
+        body: dict = {"mode": mode.value}
+        if mode is GroupMode.EVEN:
+            names = self._names()
+            if not names:
+                self._show_message("平均分配需要輸入條件名稱（以逗號分隔）")
+                return
+            body["names"] = names
+        elif mode is GroupMode.CUSTOM:
+            entries = []
+            for line in self.custom_text.splitlines():
+                if not line.strip():
+                    continue
+                name, sep, samples = line.replace("：", ":").partition(":")
+                if not sep or not name.strip():
+                    self._show_message(f"自訂格式應為「條件名稱: G1-G4, G7」，此行有誤：{line}")
+                    return
+                entries.append({"name": name.strip(), "samples": samples.strip()})
+            if not entries:
+                self._show_message("請輸入至少一行自訂條件")
+                return
+            body["entries"] = entries
+        try:
+            data = await api.post_json(f"/jv/jobs/{self.job_id}/grouping/preview", body)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        self.conditions = [GroupCond(c["name"], list(c["samples"])) for c in data["conditions"]]
+        self.unassigned = list(data["unassigned"])
+        self.selected_sample = ""
+        self._unconfirm()
+
+    @rx.event
+    def blank_grouping(self) -> None:
+        """只建立空白條件框，所有樣品放在未分配區。"""
+        names = self._names()
+        if not names:
+            self._show_message("請先輸入條件名稱（以逗號分隔）")
+            return
+        if len(set(names)) != len(names):
+            self._show_message("條件名稱不可重複")
+            return
+        self.conditions = [GroupCond(n, []) for n in names]
+        self.unassigned = list(self.samples)
+        self.selected_sample = ""
+        self._unconfirm()
+
+    @rx.event
+    def add_condition(self) -> None:
+        """新增一個空白條件框。"""
+        name = self.new_cond_name.strip()
+        if not name:
+            self._show_message("請輸入條件名稱")
+            return
+        if any(c.name == name for c in self.conditions):
+            self._show_message(f"條件名稱「{name}」已存在")
+            return
+        if not self.conditions and not self.unassigned:
+            self.unassigned = list(self.samples)  # 第一次直接新增條件時，樣品都先放未分配區
+        self.conditions = [*self.conditions, GroupCond(name, [])]
+        self.new_cond_name = ""
+        self._unconfirm()
+
+    @rx.event
+    def remove_condition(self, index: int) -> None:
+        """刪除條件框，其中的樣品移回未分配區。"""
+        removed = self.conditions[index]
+        self.conditions = [c for i, c in enumerate(self.conditions) if i != index]
+        self.unassigned = self._sorted([*self.unassigned, *removed.samples])
+        self._unconfirm()
+
+    @rx.event
+    def pick_sample(self, sample: str) -> None:
+        """點選樣品卡片（再點一次取消）。"""
+        self.selected_sample = "" if self.selected_sample == sample else sample
+
+    def _take_selected(self) -> str:
+        """把已選的樣品從所在位置移除並回傳；沒有選擇時回傳空字串。"""
+        sample = self.selected_sample
+        if not sample:
+            return ""
+        self.unassigned = [s for s in self.unassigned if s != sample]
+        self.conditions = [GroupCond(c.name, [s for s in c.samples if s != sample]) for c in self.conditions]
+        self.selected_sample = ""
+        return sample
+
+    @rx.event
+    def move_to(self, index: int) -> None:
+        """把已選的樣品放進第 index 個條件框。"""
+        sample = self._take_selected()
+        if not sample:
+            return
+        conds = list(self.conditions)
+        conds[index] = GroupCond(conds[index].name, self._sorted([*conds[index].samples, sample]))
+        self.conditions = conds
+        self._unconfirm()
+
+    @rx.event
+    def move_to_unassigned(self) -> None:
+        """把已選的樣品移回未分配區。"""
+        sample = self._take_selected()
+        if not sample:
+            return
+        self.unassigned = self._sorted([*self.unassigned, sample])
+        self._unconfirm()
+
+    @rx.event
+    async def confirm_grouping(self):
+        """確認分組並存到伺服器；所有樣品須分配完。"""
+        if self.unassigned:
+            self._show_message("尚未分配的樣品：" + "、".join(self.unassigned))
+            return
+        body = {"conditions": [{"name": c.name, "samples": c.samples} for c in self.conditions]}
+        try:
+            data = await api.put_json(f"/jv/jobs/{self.job_id}/conditions", body)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        self._apply_job(data)
+        self.keep_overrides = {}
+
+    # ---------- Excel ----------
+    @rx.event
+    async def download_excel(self):
+        """下載 ALL_Data.xlsx（參數 sheet 依勾選的方向）。"""
+        directions = [d.value for d, on in ((Direction.FW, self.excel_fw), (Direction.RV, self.excel_rv)) if on]
+        if not directions:
+            self._show_message("請至少勾選一個方向（FW 或 RV）")
+            return
+        self.loading = True
+        yield
+        try:
+            content = await api.get_bytes(f"/jv/jobs/{self.job_id}/excel", params={"directions": directions})
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        yield rx.download(data=content, filename=EXCEL_NAME)
+
+    # ---------- Box 圖 ----------
+    def _box_body(self) -> dict:
+        """組出 Box 表參數（方向、範圍、手動保留）；輸入格式錯誤拋出 ValueError。"""
+        ranges = {}
+        for param in BOX_FILTER_PARAMS:
+            lo = _parse_float(self.range_min.get(param.value, ""), f"{param.value} 下限")
+            hi = _parse_float(self.range_max.get(param.value, ""), f"{param.value} 上限")
+            if lo is not None and hi is not None and lo > hi:
+                raise ValueError(f"「{param.value}」下限不可大於上限")
+            if lo is not None or hi is not None:
+                ranges[param.value] = {"minimum": lo, "maximum": hi}
+        body: dict = {
+            "mode": self.box_mode,
+            "ranges": ranges,
+            "keep": {int(k): v for k, v in self.keep_overrides.items()},
+        }
+        if self.box_mode == DirectionMode.PER_SAMPLE.value:
+            body["sample_directions"] = dict(self.sample_dirs)
+        return body
+
+    async def _load_box_table(self) -> None:
+        """向 API 取得 Box 表並轉成顯示用的列；失敗時拋出 ApiError 或 ValueError。"""
+        rows = await api.post_json(f"/jv/jobs/{self.job_id}/box/table", self._box_body())
+        self.box_rows = [
+            BoxRow(
+                row=int(r[BoxColumn.ROW.value]),
+                condition=str(r[BoxColumn.CONDITION.value]),
+                sample=str(r[BoxColumn.SAMPLE.value]),
+                direction=str(r[BoxColumn.DIRECTION.value]),
+                pixel=_fmt(r[BoxColumn.PIXEL.value]),
+                pce=_fmt(r.get(JVParam.PCE.value)),
+                voc=_fmt(r.get(JVParam.VOC.value)),
+                jsc=_fmt(r.get(JVParam.JSC.value)),
+                ff=_fmt(r.get(JVParam.FF.value)),
+                rsh=_fmt(r.get(JVParam.RSH.value)),
+                keep=bool(r[BoxColumn.KEEP.value]),
+            )
+            for r in rows
+        ]
+
+    @rx.event
+    async def refresh_box_table(self):
+        """套用方向與範圍篩選，更新 Box 表給使用者確認。"""
+        try:
+            await self._load_box_table()
+        except ValueError as exc:
+            self._show_message(str(exc))
+        except ApiError as err:
+            self._handle_error(err)
+
+    @rx.event
+    async def toggle_keep(self, row: int, value: bool):
+        """手動勾選是否保留某一列，然後更新表格。"""
+        self.keep_overrides = {**self.keep_overrides, str(row): value}
+        try:
+            await self._load_box_table()
+        except (ValueError, ApiError) as err:
+            self._show_message(str(err))
+
+    @rx.event
+    async def reset_keep(self):
+        """清除所有手動保留，回到篩選結果。"""
+        self.keep_overrides = {}
+        try:
+            await self._load_box_table()
+        except (ValueError, ApiError) as err:
+            self._show_message(str(err))
+
+    @rx.event
+    async def plot_box(self):
+        """畫目前參數的 Box 圖（只畫保留的值）。"""
+        try:
+            body = self._box_body()
+            lo = _parse_float(self.box_ymin, "Y 軸下限")
+            hi = _parse_float(self.box_ymax, "Y 軸上限")
+        except ValueError as exc:
+            self._show_message(str(exc))
+            return
+        if (lo is None) != (hi is None):
+            self._show_message("Y 軸範圍請同時填上下限，或兩個都留空（自動）")
+            return
+        body["param"] = self.box_param
+        body["y_range"] = [lo, hi] if lo is not None else None
+        self.loading = True
+        yield
+        try:
+            png = await api.post_bytes(f"/jv/jobs/{self.job_id}/box/plot", body)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        self.box_png = _png_data_url(png)
+
+    # ---------- JV 曲線 ----------
+    @rx.event
+    def toggle_curve_sample(self, sample: str, checked: bool) -> None:
+        """勾選或取消某樣品。"""
+        if checked:
+            self.curve_selected = self._sorted(list({*self.curve_selected, sample}))
+        else:
+            self.curve_selected = [s for s in self.curve_selected if s != sample]
+
+    @rx.event
+    def select_all_curves(self) -> None:
+        """全選。"""
+        self.curve_selected = list(self.samples)
+
+    @rx.event
+    def select_no_curves(self) -> None:
+        """全消。"""
+        self.curve_selected = []
+
+    @rx.event
+    def reset_curve_range(self) -> None:
+        """Y 軸範圍回到預設 −40 到 10 mA/cm²。"""
+        self.curve_ymin, self.curve_ymax = DEFAULT_Y_RANGE
+
+    @rx.event
+    async def plot_curves(self):
+        """畫 JV 曲線疊圖（FW 實線、RV 虛線）。"""
+        directions = [d.value for d, on in ((Direction.FW, self.curve_fw), (Direction.RV, self.curve_rv)) if on]
+        if not self.curve_selected:
+            self._show_message("請至少勾選一個樣品")
+            return
+        if not directions:
+            self._show_message("請至少勾選一個方向（FW 或 RV）")
+            return
+        try:
+            lo = _parse_float(self.curve_ymin, "Y 軸下限")
+            hi = _parse_float(self.curve_ymax, "Y 軸上限")
+        except ValueError as exc:
+            self._show_message(str(exc))
+            return
+        if lo is None or hi is None or lo >= hi:
+            self._show_message("Y 軸範圍需要填上下限，且下限小於上限")
+            return
+        body = {"samples": self.curve_selected, "directions": directions, "y_range": [lo, hi]}
+        self.loading = True
+        yield
+        try:
+            png = await api.post_bytes(f"/jv/jobs/{self.job_id}/curves/plot", body)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        self.curve_png = _png_data_url(png)

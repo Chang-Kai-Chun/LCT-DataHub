@@ -31,7 +31,7 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 
 ---
 
-### 開發進度總覽（2026-11-06）
+### 開發進度總覽（2026-11-10）
 
 | 區 | 核心（`core/`） | 說明 |
 | --- | --- | --- |
@@ -42,7 +42,8 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 | E　衍生指標 | 暫緩 | |
 | F　色票 | 未開始 | 繪圖暫用 `plotting.py` 內建色盤 |
 | G　裝置紀錄與工作資料夾 | **G-2 工作資料夾已完成**（`api/jobs.py`）；G-1 未開始 | |
-| **API（FastAPI）** | **A、B、C 路由已完成**（175 個 pytest 通過） | 21 個路由，見 3-6；`uv run lct-api` 啟動；Reflex 畫面尚未開始 |
+| **API（FastAPI）** | **A、B、C 路由已完成**（175 個 pytest 通過） | 21 個路由，見 3-6；`uv run lct-api` 啟動 |
+| **前端（Reflex）** | **環境已建立**（2026-11-10） | `front/` 為獨立 uv 環境，已 `reflex init`（blank）、加入 httpx；畫面尚未開始 |
 
 **A 區已完成的內容**
 - **A-1 JV 整合**：檔名解析與失敗檢查、CSV 讀取（依表頭辨識欄位）、有效面積檢查與改用指定面積重算、樣品分組（平均／自訂／自動／手動）、整合與 Excel 輸出（ALL_Data、五張參數 sheet、每檔 sheet）
@@ -558,8 +559,22 @@ lct_datahub/
     errors.py            #   core 例外 → HTTP 回應（422／400／404）
     common.py            #   上傳、PNG、下載回應、共用資料模型
     routes/              #   jv.py（A）、dark.py（B）、eqe.py（C）
-  web/                   # Reflex
+
+front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄 workspace 成員，不在 lct_datahub 內）
+  pyproject.toml         #   宣告 reflex、httpx
+  uv.lock                #   前端自己的版本鎖定檔（要 commit）
+  .python-version        #   3.13
+  .venv/                 #   前端自己的環境（不 commit）
+  rxconfig.py            #   Reflex 設定（app_name = front）
+  front/front.py         #   Reflex app 進入點（reflex init 產生，blank 範本）
+  assets/                #   靜態檔案
+  .web/                  #   Reflex 編譯產物（已在 front/.gitignore 排除）
+  reflex.lock/           #   Reflex 管理的前端套件設定
+  AGENTS.md、CLAUDE.md   #   reflex init 產生的 AI 說明（由 Reflex 管理，不手動修改）
 ```
+- **前端只透過 HTTP 呼叫 FastAPI，不直接 `import lct_datahub`**（2026-11-10）：前端與核心沒有程式碼依賴，各自擁有 `.venv` 與 `uv.lock`
+- 前端的 uv 指令要在 `front/` 內執行；若終端機啟用了根目錄 `.venv`，uv 會警告 `VIRTUAL_ENV ... will be ignored`，屬正常現象，**不要加 `--active`**（會改裝到根目錄環境）
+- `front/AGENTS.md` 要求使用 `setup-python-env` skill，但本專案不使用（2026-11-10 決定），以根目錄 `CLAUDE.md` 與本文件為準
 - **大項目（A、B、C、D）各有一個子套件與一個 `types.py`**；同一大項目內的子項目（例如 A-1、A-2、A-3）共用該 `types.py` 的 Enum 與 dataclass
 - 跨功能共用的型別（例如 `SampleId`）放在頂層模組（`sample_id.py`），不放進任何大項目的 `types.py`
 - E、F、G 目前是單一檔案，需要 Enum 時再升級成子套件
@@ -575,7 +590,7 @@ lct_datahub/
 ### 3-5　UI / Reflex 待辦（核心做完後，前端要補的工作）
 
 > [!note] 用法
-> 核心（`core/`）只提供資料與規則，**不含畫面**。凡是需要使用者操作、彈窗、顯示或下載的內容，都記在這裡，做 `web/`（Reflex）與 `api/`（FastAPI）時逐項處理。狀態：`核心已完成`＝核心函式已可用，只差畫面；`待核心`＝核心還沒做。
+> 核心（`core/`）只提供資料與規則，**不含畫面**。凡是需要使用者操作、彈窗、顯示或下載的內容，都記在這裡，做 `front/`（Reflex）與 `api/`（FastAPI）時逐項處理。狀態：`核心已完成`＝核心函式已可用，只差畫面；`待核心`＝核心還沒做。
 
 **共通**
 - 檔案上傳（`rx.upload`）：JV 只接受 `.csv`，其他副檔名忽略
@@ -757,20 +772,25 @@ lct_datahub/
 | `pytest` | 9.1.1 | 測試（`uv run pytest`） |
 | `httpx` | 0.28.1 | 測試 FastAPI |
 
-**前端 `front/`（workspace 成員，另有自己的 `pyproject.toml`）**
+**前端 `front/`（獨立 uv 專案，自己的 `pyproject.toml`、`uv.lock`、`.venv`）**
 | 套件 | 開發機版本 | 用途 |
 | --- | --- | --- |
-| `reflex` | 0.10.0 | 前端框架（`web/` 日後使用） |
+| `reflex` | 0.10.1 | 前端框架（`front/`） |
+| `httpx` | 0.28.1 | 前端呼叫 FastAPI |
+
+- `front\.venv` 是前端專用環境（Python 3.13.7），由 `front/` 內的 `uv sync` 建立；根目錄 `.venv` 不含 reflex
+- 根目錄與 `front/` 都有 httpx 0.28.1，但分屬兩個環境（根目錄為測試用、`front` 為呼叫 API 用）
 
 **標準庫以外、但不是自己安裝的**
-- `pillow`（12.3.0）等是 matplotlib、reflex 帶進來的間接依賴，不需要自己管；版本以 `uv.lock` 為準
+- `pillow`（12.3.0）等是 matplotlib、reflex 帶進來的間接依賴，不需要自己管；版本以各自的 `uv.lock` 為準
 
 **在新電腦重建環境**
 1. 安裝 uv，並取得專案（`git clone`／`git pull`）
-2. 在專案根目錄執行 `uv sync --all-packages`（會依 `uv.lock` 裝好 Python 3.13 與全部套件，**含 `front` 的 reflex**）
-3. 執行 `uv run pytest` 確認環境正常（目前 158 個，測試資料資料夾不存在的測試會自動略過）
-4. 需要新套件：先告訴 Gino，再用 `uv add <套件>`（若要避免立刻同步，用 `uv add --no-sync <套件>` 後接著 `uv sync --all-packages`）；**不要只執行 `uv sync`**，它會把 `front` 的套件從共用 `.venv` 移除
-5. 新增套件後，更新本節的表格與版本
+2. 在專案根目錄執行 `uv sync`（依根目錄 `uv.lock` 裝好 Python 3.13 與核心、API、測試套件）
+3. 進入 `front/` 再執行一次 `uv sync`（依 `front/uv.lock` 建立 `front\.venv`，裝好 reflex、httpx）
+4. 在根目錄執行 `uv run pytest` 確認環境正常（目前 175 個，測試資料資料夾不存在的測試會自動略過）
+5. 需要新套件：先告訴 Gino，再到**對應的資料夾**執行 `uv add <套件>`（核心／API 在根目錄，前端在 `front/`）
+6. 新增套件後，更新本節的表格與版本
 
 **測試資料資料夾**（測試與示範腳本會用到；不在時測試自動略過，但示範腳本會失敗）
 - `JV_test_file/`（A 區）、`JD_test_file/`（B 區）、`EQE_test_file/`（C 區）：這三個資料夾要隨專案一起帶到新電腦（commit 或另外複製）
@@ -853,6 +873,9 @@ lct_datahub/
 | 2026-11-06 | Box 表狀態 | 不存在伺服器：前端每次送出方向、範圍、手動保留，伺服器重算 |
 | 2026-11-06 | API 錯誤格式 | 檔案問題 422（`kind`=file，附 filename、reason、expected、actual）；輸入問題 400（`kind`=input）；找不到工作 404 |
 | 2026-11-06 | API port | FastAPI 8000（Reflex 後端 8001、前端 3000）；工作資料夾、host、port 可用環境變數 `LCT_WORK_ROOT`、`LCT_API_HOST`、`LCT_API_PORT` 覆寫 |
+| 2026-11-10 | 前端資料夾與環境 | Reflex 前端沿用 `front/`（原規劃為 `web/`）；**前端為獨立 uv 環境**（自己的 `pyproject.toml`、`uv.lock`、`.venv`、`.python-version` = 3.13），根目錄 `pyproject.toml` 移除 `[tool.uv.workspace]`（同日先決定共用 workspace，後改為獨立）；前端只透過 HTTP 呼叫 FastAPI，不直接 import 核心 |
+| 2026-11-10 | Reflex 版本與套件 | reflex 0.10.1、httpx 0.28.1（前端呼叫 API）；`reflex init` 選 blank 範本 |
+| 2026-11-10 | Reflex AI skills | 安裝官方 `reflex@reflex-agent-skills`；只用 `reflex-docs`、`reflex-process-management`，不用 `setup-python-env`（會另建環境）；`plugin:reflex:reflex` MCP 伺服器需授權，目前用不到，暫不設定 |
 
 ### 6-3　仍待確認
 1. **裝置紀錄 md 的資料夾路徑**：由新專案決定；決定後請把實際路徑寫回這裡，作為本專案的紀錄
