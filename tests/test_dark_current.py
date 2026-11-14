@@ -17,12 +17,13 @@ from lct_datahub.core.dark_current.export import (
 )
 from lct_datahub.core.dark_current.integrate import (
     dark_areas,
+    is_dark_file,
     list_dark_files,
     read_dark_file,
     read_dark_files,
     unique_names,
 )
-from lct_datahub.core.dark_current.select import curve_names, select_dark_curves
+from lct_datahub.core.dark_current.select import curve_names, device_of, select_dark_curves
 from lct_datahub.core.dark_current.shift import minimum_voltage, shift_curve, shift_curves
 from lct_datahub.core.dark_current.truncate import keep_count
 from lct_datahub.core.dark_current.types import (
@@ -169,6 +170,43 @@ def test_list_dark_files_filters(tmp_path):
     for name in ["a_abs.xlsx", "b.xlsx", "~$a_abs.xlsx", "c.txt", "d.dat", "e.csv", "f.jpg"]:
         (tmp_path / name).write_bytes(b"")
     assert [p.name for p in list_dark_files(tmp_path)] == ["a_abs.xlsx", "c.txt", "d.dat", "e.csv"]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("G1 REF-1_330 K_abs (明志).xls", True),
+        ("a_ABS.xlsx", True),  # _abs 不分大小寫
+        ("a.xls", False),  # Excel 檔名沒有 _abs 不讀取
+        ("a.xlsx", False),
+        ("~$a_abs.xlsx", False),  # Office 暫存檔
+        ("a.txt", True),  # 文字檔不需要 _abs
+        ("a.jpg", False),
+    ],
+)
+def test_is_dark_file(name, expected):
+    """資料夾讀取與 API 上傳共用的檔名規則。"""
+    assert is_dark_file(name) is expected
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("G1-3", "G1"),
+        ("G10-4", "G10"),
+        ("G7-1_second", "G7"),
+        ("G1 REF-1_330 K", "G1"),  # 明志：取開頭代號
+        ("g01-2", "G1"),  # 正規化：大寫、去前導零
+        ("I10", "I10"),
+        ("G1x-1", None),  # 代號後緊接字母，不是代號
+        ("Sample-1", None),
+        ("REF", None),
+    ],
+)
+def test_device_of(name, expected):
+    """曲線名稱 → 元件。"""
+    device = device_of(name)
+    assert (str(device) if device else None) == expected
 
 
 def _curve(name: str, source: str = "f.txt", area: float = 0.045) -> DarkCurve:

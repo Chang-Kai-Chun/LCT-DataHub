@@ -21,19 +21,21 @@ _EXCEL_SUFFIXES = {".xlsx", ".xls"}
 _ENCODINGS = ("utf-8-sig", "cp950")  # 先試 utf-8，失敗改 cp950
 
 
-def list_dark_files(folder: Path) -> list[Path]:
-    """列出資料夾內可處理的暗電流檔，依檔名排序。
+def is_dark_file(name: str) -> bool:
+    """判斷檔名是否為可處理的暗電流檔（資料夾讀取與 API 上傳共用同一規則）。
 
-    支援 txt、csv、dat、xlsx、xls；Excel 副檔名的檔名必須含 '_abs'；Office 暫存檔（~$）略過。
+    支援 txt、csv、dat、xlsx、xls；Excel 副檔名的檔名必須含 '_abs'（明志）；Office 暫存檔（~$）不算。
     """
-    result = []
-    for p in Path(folder).iterdir():
-        if p.suffix.lower() not in _SUFFIXES or p.name.startswith("~$"):
-            continue
-        if p.suffix.lower() in _EXCEL_SUFFIXES and ABS_MARK not in p.name.lower():
-            continue
-        result.append(p)
-    return sorted(result)
+    suffix = Path(name).suffix.lower()
+    if suffix not in _SUFFIXES or name.startswith("~$"):
+        return False
+    # Excel 檔名沒有 _abs 的不讀取
+    return suffix not in _EXCEL_SUFFIXES or ABS_MARK in name.lower()
+
+
+def list_dark_files(folder: Path) -> list[Path]:
+    """列出資料夾內可處理的暗電流檔（規則見 is_dark_file），依檔名排序。"""
+    return sorted(p for p in Path(folder).iterdir() if is_dark_file(p.name))
 
 
 def _read_text(path: Path) -> str:

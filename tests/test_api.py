@@ -100,7 +100,7 @@ def test_dark_flow(client):
     url = f"/api/dark/jobs/{job['job_id']}"
     # PD-QE 檔內 4.5 mm²；明志由 |I|/J 反推也是 0.045 cm²，所以一致
     assert len(job["curves"]) == 58 and job["area_report"]["uniform_value"] == 0.045
-    assert job["settings"] == {"area": None, "shift_mode": "保持原始"}
+    assert job["settings"] == {"area": None, "shift_mode": "保持原始", "conditions": None}
     assert not any(c["is_shifted"] for c in job["curves"])
 
     shifted = client.put(f"{url}/settings", json={"shift_mode": "偏移到 0 V", "area": 0.05}).json()
@@ -115,6 +115,44 @@ def test_dark_flow(client):
 
     res = client.get(f"{url}/excel")
     assert res.headers["content-type"] == "application/zip"
+
+
+@needs(JD_DIR)
+def test_dark_grouping(client):
+    """元件分組：預填 → 確認（須全部分配）；改面積、偏移不會清掉分組。"""
+    job = _upload(client, "dark", _files(JD_DIR)).json()
+    url = f"/api/dark/jobs/{job['job_id']}"
+    devices = job["devices"]
+    # 明志的 G1 REF-1_330 K 取開頭代號，與 PD-QE 的 G1-x 同一個元件
+    assert "G1" in devices and devices == sorted(devices, key=lambda d: int(d[1:]))
+    assert {c["device"] for c in job["curves"] if c["name"].startswith(("G1-", "G1 "))} == {"G1"}
+
+    preview = client.post(f"{url}/grouping/preview", json={"mode": "平均分配", "names": ["A", "B"]}).json()
+    assert [c["name"] for c in preview["conditions"]] == ["A", "B"] and preview["unassigned"] == []
+    assert sorted(sum((c["samples"] for c in preview["conditions"]), [])) == sorted(devices)
+
+    # 未全部分配：400；全部分配：存檔
+    half = {"conditions": [{"name": "A", "samples": devices[:2]}]}
+    assert client.put(f"{url}/conditions", json=half).status_code == 400
+    saved = client.put(f"{url}/conditions", json={"conditions": preview["conditions"]}).json()
+    assert saved["settings"]["conditions"] == preview["conditions"]
+
+    # 改面積與偏移後，分組仍在
+    after = client.put(f"{url}/settings", json={"area": 0.05, "shift_mode": "偏移到 0 V"}).json()
+    assert after["settings"]["conditions"] == preview["conditions"]
+
+
+@needs(JD_DIR)
+def test_dark_upload_skips_excel_without_abs(client):
+    """上傳時 Excel 檔名沒有 _abs 的略過（列在 skipped），其餘照常讀取。"""
+    txt = next(p for p in JD_DIR.iterdir() if p.suffix == ".txt")
+    files = [("files", (txt.name, txt.read_bytes())), ("files", ("no_mark.xlsx", b"x")), ("files", ("~$t_abs.xlsx", b"x"))]
+    job = client.post("/api/dark/jobs", files=files).json()
+    assert job["skipped"] == ["no_mark.xlsx", "~$t_abs.xlsx"]
+    assert {c["source"] for c in job["curves"]} == {txt.name}
+    # 只有不符合規則的檔案：400
+    res = client.post("/api/dark/jobs", files=[("files", ("no_mark.xls", b"x"))])
+    assert res.status_code == 400 and res.json()["kind"] == "input"
 
 
 # ---------- A JV ----------

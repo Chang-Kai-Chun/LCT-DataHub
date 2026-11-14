@@ -1,7 +1,9 @@
 """A-1：JV 檔名解析（<代號+編號> <FW|RV> <Pixel 數字串>）與重複檔案檢查。
 
+三段之間的空格可有可無（2026-11-13）：G1 FW 432、G1FW432、G1 FW432 都可以。
 任何問題都拋出 JVFileError（不略過、不猜測），由呼叫端警告並停止作業。
 """
+import re
 from collections import defaultdict
 from pathlib import PurePath
 
@@ -14,35 +16,48 @@ from lct_datahub.core.jv.types import (
 )
 from lct_datahub.core.sample_id import InvalidSampleIdError, parse_sample_id
 
-_FORMAT_HINT = "例如 G1 FW 432"
+_FORMAT_HINT = "例如 G1 FW 432 或 G1FW432"
+
+# 方向的寫法（FW|RV），由 Direction 產生，避免寫死
+_DIRS = "|".join(d.value for d in Direction)
+# 第 1 段：樣品代號（1–3 個字母＋數字），後面必須是空白、方向或結尾，避免 G1x 這類被誤切
+_SAMPLE_PART = re.compile(rf"^([A-Za-z]{{1,3}}\d+)(?=\s|{_DIRS}|$)\s*(.*)$", re.IGNORECASE)
+# 第 2 段：方向，後面必須是空白、數字或結尾，避免 FWD 被當成 FW
+_DIRECTION_PART = re.compile(rf"^({_DIRS})(?=\s|\d|$)\s*(.*)$", re.IGNORECASE)
 
 
 def parse_jv_filename(filename: str) -> JVFileName:
-    """解析單一檔名（可含副檔名），例如 'G1 FW 432.csv'。"""
-    stem = PurePath(filename).stem
-    tokens = stem.split()
+    """解析單一檔名（可含副檔名），例如 'G1 FW 432.csv' 或 'G1FW432.csv'。
+
+    依序從前面切出樣品、方向、Pixel；三段之間的空格可有可無，大小寫不分。
+    """
+    stem = PurePath(filename).stem.strip()
 
     # 第 1 段：樣品代號
-    if not tokens:
+    if not stem:
         raise JVFileError(filename, FailureReason.BAD_FORMAT, _FORMAT_HINT, "空白檔名")
+    match = _SAMPLE_PART.match(stem)
+    if match is None:
+        raise JVFileError(filename, FailureReason.BAD_FORMAT, _FORMAT_HINT, stem)
     try:
-        sample = parse_sample_id(tokens[0])
+        sample = parse_sample_id(match.group(1))
     except InvalidSampleIdError:
         raise JVFileError(filename, FailureReason.BAD_FORMAT, _FORMAT_HINT, stem) from None
+    rest = match.group(2)
 
     # 第 2 段：方向（不分大小寫）
-    valid_dirs = {d.value for d in Direction}
-    if len(tokens) < 2 or tokens[1].upper() not in valid_dirs:
-        actual = tokens[1] if len(tokens) >= 2 else "無"
+    match = _DIRECTION_PART.match(rest)
+    if match is None:
+        actual = rest.split()[0] if rest else "無"
         raise JVFileError(filename, FailureReason.MISSING_DIRECTION, "FW 或 RV", actual)
-    direction = Direction(tokens[1].upper())
+    direction = Direction(match.group(1).upper())
+    digits = match.group(2)
 
-    # 第 3 段：Pixel 數字串
-    if len(tokens) < 3:
+    # 第 3 段：Pixel 數字串（之後不可再有其他內容）
+    if not digits:
         raise JVFileError(filename, FailureReason.MISSING_PIXELS, "2–6 的數字串，例如 432", "無")
-    if len(tokens) > 3:
+    if len(digits.split()) > 1:
         raise JVFileError(filename, FailureReason.BAD_FORMAT, _FORMAT_HINT, stem)
-    digits = tokens[2]
     if not digits.isdigit():
         raise JVFileError(filename, FailureReason.INVALID_PIXEL, "只含 2–6 的數字", digits)
     pixels = tuple(int(c) for c in digits)

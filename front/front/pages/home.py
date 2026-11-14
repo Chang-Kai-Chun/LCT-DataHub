@@ -69,7 +69,7 @@ def home() -> rx.Component:
             _api_status(),
             rx.grid(
                 _feature("A　JV", "JV 整合、分組、ALL_Data、Box 圖、JV 曲線", Route.JV),
-                _feature("B　暗電流", "暗電流整合、最低點偏移、暗電流圖", None),
+                _feature("B　暗電流", "暗電流整合、最低點偏移、暗電流圖", Route.DARK),
                 _feature("C　EQE", "EQE 整合、EQE 加積分電流圖、R-plot", None),
                 columns="3",
                 spacing="3",

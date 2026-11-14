@@ -1,4 +1,4 @@
-"""B 區暗電流：上傳 → 面積確認 → 最低點偏移 → 下載 Excel；暗電流圖（B-3）。
+"""B 區暗電流：上傳 → 面積確認 → 最低點偏移 → 下載 Excel；元件分組（只影響畫圖勾選）；暗電流圖（B-3）。
 
 路由為 async def，讀檔、計算、畫圖等同步工作以 asyncio.to_thread() 交給執行緒（規則見完整文件 3-4）。
 """
@@ -12,32 +12,43 @@ from pydantic import BaseModel
 from lct_datahub.api.common import (
     AreaReportOut, AxisRange, download_response, get_store, png_response, read_uploads,
 )
+from lct_datahub.api.grouping import (
+    ConditionModel, ConditionsIn, GroupingIn, GroupingOut, confirm_grouping, preview_grouping,
+)
 from lct_datahub.api.jobs import Job, JobStore, Section
 from lct_datahub.core.area_check import check_areas
 from lct_datahub.core.dark_current.area import AREA_OVERRIDE_NOTICE, apply_dark_area
 from lct_datahub.core.dark_current.export import write_dark_excels
-from lct_datahub.core.dark_current.integrate import dark_areas, read_dark_files
-from lct_datahub.core.dark_current.select import select_dark_curves
+from lct_datahub.core.dark_current.integrate import dark_areas, is_dark_file, read_dark_files
+from lct_datahub.core.dark_current.select import device_list, device_of, select_dark_curves
 from lct_datahub.core.dark_current.shift import shift_curves
 from lct_datahub.core.dark_current.types import DarkCurve, ShiftMode
 from lct_datahub.core.plotting import plot_dark_current
+from lct_datahub.core.sample_id import SampleId
 
 SECTION = Section.DARK
 router = APIRouter(prefix=f"/api/{SECTION.value}", tags=["B 暗電流"])
 
 
 # ---------- 資料模型 ----------
-class DarkSettings(BaseModel):
-    """工作設定：指定面積（null 為沿用檔內面積）與最低點處理方式。"""
+class DarkSettingsIn(BaseModel):
+    """PUT settings 的內容：指定面積（null 為沿用檔內面積）與最低點處理方式。"""
 
     area: float | None = None
     shift_mode: ShiftMode = ShiftMode.KEEP
+
+
+class DarkSettings(DarkSettingsIn):
+    """工作設定（存在 settings.json）：另含已確認的元件分組（null 為尚未分組，只影響畫圖勾選的排列）。"""
+
+    conditions: list[ConditionModel] | None = None
 
 
 class DarkCurveOut(BaseModel):
     """一條曲線的摘要（給勾選清單與面積確認）。"""
 
     name: str
+    device: str | None  # 所屬元件（名稱開頭的代號，G1-1 → G1）；無法辨識為 null
     instrument: str
     source: str
     area: float  # 目前使用的面積（cm²）
@@ -57,6 +68,7 @@ class DarkJobOut(BaseModel):
     settings: DarkSettings
     area_report: AreaReportOut  # 依檔內（原始）面積檢查
     area_notice: str = AREA_OVERRIDE_NOTICE  # 改用指定面積前要給使用者看的警告
+    devices: list[str]  # 所有元件（分組用的樣品清單），依代號排序
     curves: list[DarkCurveOut]
 
 
@@ -91,9 +103,10 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Dar
         skipped=skipped or [],
         settings=settings,
         area_report=AreaReportOut.from_report(check_areas(dark_areas(raw))),
+        devices=[str(d) for d in device_list(curves)],
         curves=[
             DarkCurveOut(
-                name=c.name, instrument=c.instrument.value, source=c.source, area=c.area,
+                name=c.name, device=_device_text(c.name), instrument=c.instrument.value, source=c.source, area=c.area,
                 area_from_file=c.area_from_file, timestamp=c.timestamp, points=len(c.data),
                 removed_points=c.removed_points, shift=c.shift, is_shifted=c.is_shifted,
             )
@@ -103,17 +116,43 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Dar
 
 
 def _create(store: JobStore, uploads: list[tuple[str, bytes]]) -> DarkJobOut:
-    """建立工作並讀檔。"""
-    result = store.create(SECTION, uploads)
+    """建立工作並讀檔；Excel 檔名沒有 _abs 的略過（is_dark_file）。"""
+    result = store.create(SECTION, uploads, accept=is_dark_file)
     return _job_out(store, result.job, result.skipped)
 
 
-def _update(store: JobStore, job_id: str, body: DarkSettings) -> DarkJobOut:
-    """驗證並儲存設定。"""
+def _device_text(name: str) -> str | None:
+    """曲線所屬元件的文字（無法辨識為 None）。"""
+    device = device_of(name)
+    return str(device) if device else None
+
+
+def _devices(store: JobStore, job: Job) -> list[SampleId]:
+    """工作中所有元件（由原始檔的曲線名稱取得，與面積、偏移無關）。"""
+    return device_list(list(_read_raw(tuple(job.raw_files()))))
+
+
+def _update(store: JobStore, job_id: str, body: DarkSettingsIn) -> DarkJobOut:
+    """驗證並儲存面積與偏移方式（已確認的分組保留不動）。"""
     job = store.get(SECTION, job_id)
     if body.area is not None:
         apply_dark_area([], body.area)  # 只做驗證：面積必須是大於 0 的數值
-    store.save_settings(job, body)
+    settings = store.load_settings(job, DarkSettings)
+    store.save_settings(job, settings.model_copy(update=body.model_dump()))
+    return _job_out(store, job)
+
+
+def _preview(store: JobStore, job_id: str, body: GroupingIn) -> GroupingOut:
+    """依分組方式預填元件分組（不存檔）。"""
+    return preview_grouping(_devices(store, store.get(SECTION, job_id)), body)
+
+
+def _confirm(store: JobStore, job_id: str, body: ConditionsIn) -> DarkJobOut:
+    """驗證並儲存元件分組（所有元件都須分配）。"""
+    job = store.get(SECTION, job_id)
+    models = confirm_grouping(_devices(store, job), body)
+    settings = store.load_settings(job, DarkSettings)
+    store.save_settings(job, settings.model_copy(update={"conditions": models}))
     return _job_out(store, job)
 
 
@@ -147,9 +186,21 @@ async def get_job(job_id: str, store: JobStore = Depends(get_store)) -> DarkJobO
 
 
 @router.put("/jobs/{job_id}/settings", response_model=DarkJobOut)
-async def update_settings(job_id: str, body: DarkSettings, store: JobStore = Depends(get_store)) -> DarkJobOut:
+async def update_settings(job_id: str, body: DarkSettingsIn, store: JobStore = Depends(get_store)) -> DarkJobOut:
     """設定面積（會更動數據，前端須先顯示 area_notice）與最低點處理；面積不合理回 400。"""
     return await asyncio.to_thread(_update, store, job_id, body)
+
+
+@router.post("/jobs/{job_id}/grouping/preview", response_model=GroupingOut)
+async def preview_groups(job_id: str, body: GroupingIn, store: JobStore = Depends(get_store)) -> GroupingOut:
+    """依分組方式預填元件分組（不存檔）；前端微調後再用 PUT conditions 確認。"""
+    return await asyncio.to_thread(_preview, store, job_id, body)
+
+
+@router.put("/jobs/{job_id}/conditions", response_model=DarkJobOut)
+async def confirm_conditions(job_id: str, body: ConditionsIn, store: JobStore = Depends(get_store)) -> DarkJobOut:
+    """確認元件分組（只影響畫圖勾選的排列，不影響 Excel）；未全部分配回 400。"""
+    return await asyncio.to_thread(_confirm, store, job_id, body)
 
 
 @router.get("/jobs/{job_id}/excel")

@@ -4,15 +4,16 @@
 Box 表狀態不存在伺服器（11/06 決定），每次由這裡送出方向、範圍、手動保留。
 所有 API 呼叫都是 async，失敗時開啟 ErrorState 的警告視窗。
 """
-import base64
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import reflex as rx
 
 from front import api_client as api
 from front.api_client import ApiError
-from front.enums import BOX_FILTER_PARAMS, BoxColumn, Direction, DirectionMode, ErrorKind, GroupMode, JVParam, JVTab
+from front.enums import BOX_FILTER_PARAMS, BoxColumn, Direction, DirectionMode, ErrorKind, JVParam, JVTab
+from front.states.common import AreaRow, fmt, parse_float, png_data_url
 from front.states.error_state import ErrorState
+from front.states.grouping import GroupingMixin
 
 UPLOAD_ID = "jv_upload"
 CSV_TYPE = "text/csv"
@@ -29,22 +30,6 @@ class FileRow:
     sample: str = ""
     direction: str = ""
     pixels: str = ""
-
-
-@dataclass
-class AreaRow:
-    """面積檢查：檔名與該檔出現的面積。"""
-
-    filename: str = ""
-    areas: str = ""
-
-
-@dataclass
-class GroupCond:
-    """分組畫面的一個條件框。"""
-
-    name: str = ""
-    samples: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -73,34 +58,8 @@ class BoxRow:
     keep: bool = True
 
 
-# ---------- 小工具 ----------
-def _fmt(value) -> str:
-    """數值轉顯示文字（4 位有效數字）；None 顯示空白。"""
-    if value is None:
-        return ""
-    if isinstance(value, float):
-        return f"{value:.4g}"
-    return str(value)
-
-
-def _parse_float(text: str, label: str) -> float | None:
-    """把輸入框文字轉成數值；空白回傳 None，格式錯誤拋出 ValueError（訊息含欄位名稱）。"""
-    text = text.strip()
-    if not text:
-        return None
-    try:
-        return float(text)
-    except ValueError:
-        raise ValueError(f"「{label}」必須是數值，目前輸入：{text}") from None
-
-
-def _png_data_url(data: bytes) -> str:
-    """PNG 內容轉成 data URL，直接給 rx.image 顯示，也可直接下載。"""
-    return "data:image/png;base64," + base64.b64encode(data).decode("ascii")
-
-
-class JVState(ErrorState):
-    """JV 頁面的狀態（ErrorState 的子狀態，共用警告視窗）。"""
+class JVState(GroupingMixin, ErrorState):
+    """JV 頁面的狀態（ErrorState 的子狀態，共用警告視窗；分組狀態來自 GroupingMixin，依樣品分組）。"""
 
     # 共用
     tab: str = JVTab.UPLOAD.value
@@ -110,7 +69,7 @@ class JVState(ErrorState):
     job_id: str = ""
     skipped: list[str] = []
     files: list[FileRow] = []
-    samples: list[str] = []  # 依數字排序（API 已排序）
+    # samples（依數字排序，API 已排序）與分組欄位定義在 GroupingMixin
 
     # 面積
     area_uniform: bool = True
@@ -125,15 +84,7 @@ class JVState(ErrorState):
     area_notice_open: bool = False
     area_input: str = ""
 
-    # 分組
-    group_mode: str = GroupMode.EVEN.value
-    group_names: str = ""  # 平均分配／空白條件用：以逗號分隔的條件名稱
-    custom_text: str = ""  # 自訂用：每行「名稱: G1-G4, G7」
-    new_cond_name: str = ""
-    conditions: list[GroupCond] = []
-    unassigned: list[str] = []
-    selected_sample: str = ""
-    groups_confirmed: bool = False
+    # 分組檢查：條件中列出、但找不到檔案的樣品
     missing: list[MissingRow] = []
 
     # Excel
@@ -172,11 +123,6 @@ class JVState(ErrorState):
         return self.job_id != "" and self.area_confirmed
 
     @rx.var
-    def can_confirm_groups(self) -> bool:
-        """所有樣品都分配完、且至少有一個條件，才能按確定（require_complete）。"""
-        return len(self.unassigned) == 0 and len(self.conditions) > 0
-
-    @rx.var
     def kept_count(self) -> int:
         """Box 表中保留的筆數。"""
         return sum(1 for r in self.box_rows if r.keep)
@@ -188,6 +134,11 @@ class JVState(ErrorState):
         self.tab = value
 
     @rx.event
+    def go_to(self, tab: str) -> None:
+        """「下一步」按鈕：切到指定分頁。"""
+        self.tab = tab
+
+    @rx.event
     def set_area_input(self, value: str) -> None:
         """面積輸入框。"""
         self.area_input = value
@@ -196,26 +147,6 @@ class JVState(ErrorState):
     def set_area_dialog_open(self, value: bool) -> None:
         """面積視窗開關。"""
         self.area_dialog_open = value
-
-    @rx.event
-    def set_group_mode(self, value: str) -> None:
-        """分組預填方式。"""
-        self.group_mode = value
-
-    @rx.event
-    def set_group_names(self, value: str) -> None:
-        """條件名稱（逗號分隔）。"""
-        self.group_names = value
-
-    @rx.event
-    def set_custom_text(self, value: str) -> None:
-        """自訂分組文字。"""
-        self.custom_text = value
-
-    @rx.event
-    def set_new_cond_name(self, value: str) -> None:
-        """新增條件的名稱。"""
-        self.new_cond_name = value
 
     @rx.event
     def set_excel_fw(self, value: bool) -> None:
@@ -304,27 +235,36 @@ class JVState(ErrorState):
 
         report = data["area_report"]
         self.area_uniform = report["is_uniform"]
-        self.area_uniform_value = _fmt(report["uniform_value"])
-        self.area_values = [_fmt(v) for v in report["values"]]
+        self.area_uniform_value = fmt(report["uniform_value"])
+        self.area_values = [fmt(v) for v in report["values"]]
         self.area_rows = [
-            AreaRow(name, ", ".join(_fmt(v) for v in values)) for name, values in report["by_file"].items()
+            AreaRow(name, ", ".join(fmt(v) for v in values)) for name, values in report["by_file"].items()
         ]
         self.area_notice = data["area_notice"]
         self.recomputed_params = data["recomputed_params"]
 
         settings = data["settings"]
-        self.area_override = _fmt(settings.get("area"))
-        conditions = settings.get("conditions")
-        self.groups_confirmed = bool(conditions)
-        if conditions:
-            self.conditions = [GroupCond(c["name"], list(c["samples"])) for c in conditions]
-            self.unassigned = []
+        self.area_override = fmt(settings.get("area"))
+        self._load_conditions(settings.get("conditions"))  # GroupingMixin：已確認的分組
         self.missing = [MissingRow(m["condition"], m["sample"], m["direction"]) for m in data.get("missing", [])]
 
         # 第一次載入時，JV 曲線預設全選、逐樣品方向預設 FW
         if not self.curve_selected:
             self.curve_selected = list(self.samples)
         self.sample_dirs = {s: self.sample_dirs.get(s, Direction.FW.value) for s in self.samples}
+
+    # ---------- GroupingMixin 需要的方法 ----------
+    def _job_path(self) -> str:
+        """工作的 API 路徑。"""
+        return f"/jv/jobs/{self.job_id}"
+
+    def _on_groups_changed(self) -> None:
+        """分組被修改：Box 表與 Box 圖失效。"""
+        self.box_rows, self.box_png = [], ""
+
+    def _on_groups_confirmed(self) -> None:
+        """分組確認後：列號會改變，手動保留清除。"""
+        self.keep_overrides = {}
 
     def _handle_error(self, err: ApiError) -> None:
         """顯示錯誤；檔案錯誤停止作業（清除工作）。"""
@@ -335,7 +275,7 @@ class JVState(ErrorState):
     # ---------- 上傳 ----------
     @rx.event
     async def handle_upload(self, files: list[rx.UploadFile]):
-        """上傳 JV CSV 建立新工作；面積不一致時開啟面積確認視窗。"""
+        """上傳 JV CSV（檔名如 G1 FW 432.csv 或 G1FW432.csv）建立新工作；面積不一致時開啟面積確認視窗。"""
         if not files:
             self._show_message("請先選擇檔案")
             return
@@ -379,7 +319,7 @@ class JVState(ErrorState):
     def area_request_override(self) -> None:
         """改用指定面積：先檢查輸入，再顯示「數據將被更動」警告。"""
         try:
-            area = _parse_float(self.area_input, "面積")
+            area = parse_float(self.area_input, "面積")
         except ValueError as exc:
             self._show_message(str(exc))
             return
@@ -398,7 +338,7 @@ class JVState(ErrorState):
         """使用者確認警告後，套用指定面積（API 重算 J、Jsc、PCE）。"""
         self.area_notice_open = False
         try:
-            area = _parse_float(self.area_input, "面積")
+            area = parse_float(self.area_input, "面積")
             data = await api.put_json(f"/jv/jobs/{self.job_id}/area", {"area": area})
         except ValueError as exc:
             self._show_message(str(exc))
@@ -411,145 +351,6 @@ class JVState(ErrorState):
         self.area_dialog_open = False
         # 面積改變後，舊的圖與 Box 表都失效
         self.box_rows, self.box_png, self.curve_png = [], "", ""
-
-    # ---------- 分組 ----------
-    def _names(self) -> list[str]:
-        """解析逗號分隔的條件名稱（去除空白）。"""
-        return [n.strip() for n in self.group_names.replace("，", ",").split(",") if n.strip()]
-
-    def _sorted(self, samples: list[str]) -> list[str]:
-        """依上傳時的樣品順序排序。"""
-        order = {s: i for i, s in enumerate(self.samples)}
-        return sorted(samples, key=lambda s: order.get(s, len(order)))
-
-    def _unconfirm(self) -> None:
-        """分組被修改後，需重新確認。"""
-        self.groups_confirmed = False
-        self.box_rows, self.box_png = [], ""
-
-    @rx.event
-    async def preview_grouping(self):
-        """依選擇的方式預填（不存檔），之後可再點選調整。"""
-        mode = GroupMode(self.group_mode)
-        body: dict = {"mode": mode.value}
-        if mode is GroupMode.EVEN:
-            names = self._names()
-            if not names:
-                self._show_message("平均分配需要輸入條件名稱（以逗號分隔）")
-                return
-            body["names"] = names
-        elif mode is GroupMode.CUSTOM:
-            entries = []
-            for line in self.custom_text.splitlines():
-                if not line.strip():
-                    continue
-                name, sep, samples = line.replace("：", ":").partition(":")
-                if not sep or not name.strip():
-                    self._show_message(f"自訂格式應為「條件名稱: G1-G4, G7」，此行有誤：{line}")
-                    return
-                entries.append({"name": name.strip(), "samples": samples.strip()})
-            if not entries:
-                self._show_message("請輸入至少一行自訂條件")
-                return
-            body["entries"] = entries
-        try:
-            data = await api.post_json(f"/jv/jobs/{self.job_id}/grouping/preview", body)
-        except ApiError as err:
-            self._handle_error(err)
-            return
-        self.conditions = [GroupCond(c["name"], list(c["samples"])) for c in data["conditions"]]
-        self.unassigned = list(data["unassigned"])
-        self.selected_sample = ""
-        self._unconfirm()
-
-    @rx.event
-    def blank_grouping(self) -> None:
-        """只建立空白條件框，所有樣品放在未分配區。"""
-        names = self._names()
-        if not names:
-            self._show_message("請先輸入條件名稱（以逗號分隔）")
-            return
-        if len(set(names)) != len(names):
-            self._show_message("條件名稱不可重複")
-            return
-        self.conditions = [GroupCond(n, []) for n in names]
-        self.unassigned = list(self.samples)
-        self.selected_sample = ""
-        self._unconfirm()
-
-    @rx.event
-    def add_condition(self) -> None:
-        """新增一個空白條件框。"""
-        name = self.new_cond_name.strip()
-        if not name:
-            self._show_message("請輸入條件名稱")
-            return
-        if any(c.name == name for c in self.conditions):
-            self._show_message(f"條件名稱「{name}」已存在")
-            return
-        if not self.conditions and not self.unassigned:
-            self.unassigned = list(self.samples)  # 第一次直接新增條件時，樣品都先放未分配區
-        self.conditions = [*self.conditions, GroupCond(name, [])]
-        self.new_cond_name = ""
-        self._unconfirm()
-
-    @rx.event
-    def remove_condition(self, index: int) -> None:
-        """刪除條件框，其中的樣品移回未分配區。"""
-        removed = self.conditions[index]
-        self.conditions = [c for i, c in enumerate(self.conditions) if i != index]
-        self.unassigned = self._sorted([*self.unassigned, *removed.samples])
-        self._unconfirm()
-
-    @rx.event
-    def pick_sample(self, sample: str) -> None:
-        """點選樣品卡片（再點一次取消）。"""
-        self.selected_sample = "" if self.selected_sample == sample else sample
-
-    def _take_selected(self) -> str:
-        """把已選的樣品從所在位置移除並回傳；沒有選擇時回傳空字串。"""
-        sample = self.selected_sample
-        if not sample:
-            return ""
-        self.unassigned = [s for s in self.unassigned if s != sample]
-        self.conditions = [GroupCond(c.name, [s for s in c.samples if s != sample]) for c in self.conditions]
-        self.selected_sample = ""
-        return sample
-
-    @rx.event
-    def move_to(self, index: int) -> None:
-        """把已選的樣品放進第 index 個條件框。"""
-        sample = self._take_selected()
-        if not sample:
-            return
-        conds = list(self.conditions)
-        conds[index] = GroupCond(conds[index].name, self._sorted([*conds[index].samples, sample]))
-        self.conditions = conds
-        self._unconfirm()
-
-    @rx.event
-    def move_to_unassigned(self) -> None:
-        """把已選的樣品移回未分配區。"""
-        sample = self._take_selected()
-        if not sample:
-            return
-        self.unassigned = self._sorted([*self.unassigned, sample])
-        self._unconfirm()
-
-    @rx.event
-    async def confirm_grouping(self):
-        """確認分組並存到伺服器；所有樣品須分配完。"""
-        if self.unassigned:
-            self._show_message("尚未分配的樣品：" + "、".join(self.unassigned))
-            return
-        body = {"conditions": [{"name": c.name, "samples": c.samples} for c in self.conditions]}
-        try:
-            data = await api.put_json(f"/jv/jobs/{self.job_id}/conditions", body)
-        except ApiError as err:
-            self._handle_error(err)
-            return
-        self._apply_job(data)
-        self.keep_overrides = {}
 
     # ---------- Excel ----------
     @rx.event
@@ -575,8 +376,8 @@ class JVState(ErrorState):
         """組出 Box 表參數（方向、範圍、手動保留）；輸入格式錯誤拋出 ValueError。"""
         ranges = {}
         for param in BOX_FILTER_PARAMS:
-            lo = _parse_float(self.range_min.get(param.value, ""), f"{param.value} 下限")
-            hi = _parse_float(self.range_max.get(param.value, ""), f"{param.value} 上限")
+            lo = parse_float(self.range_min.get(param.value, ""), f"{param.value} 下限")
+            hi = parse_float(self.range_max.get(param.value, ""), f"{param.value} 上限")
             if lo is not None and hi is not None and lo > hi:
                 raise ValueError(f"「{param.value}」下限不可大於上限")
             if lo is not None or hi is not None:
@@ -599,12 +400,12 @@ class JVState(ErrorState):
                 condition=str(r[BoxColumn.CONDITION.value]),
                 sample=str(r[BoxColumn.SAMPLE.value]),
                 direction=str(r[BoxColumn.DIRECTION.value]),
-                pixel=_fmt(r[BoxColumn.PIXEL.value]),
-                pce=_fmt(r.get(JVParam.PCE.value)),
-                voc=_fmt(r.get(JVParam.VOC.value)),
-                jsc=_fmt(r.get(JVParam.JSC.value)),
-                ff=_fmt(r.get(JVParam.FF.value)),
-                rsh=_fmt(r.get(JVParam.RSH.value)),
+                pixel=fmt(r[BoxColumn.PIXEL.value]),
+                pce=fmt(r.get(JVParam.PCE.value)),
+                voc=fmt(r.get(JVParam.VOC.value)),
+                jsc=fmt(r.get(JVParam.JSC.value)),
+                ff=fmt(r.get(JVParam.FF.value)),
+                rsh=fmt(r.get(JVParam.RSH.value)),
                 keep=bool(r[BoxColumn.KEEP.value]),
             )
             for r in rows
@@ -643,8 +444,8 @@ class JVState(ErrorState):
         """畫目前參數的 Box 圖（只畫保留的值）。"""
         try:
             body = self._box_body()
-            lo = _parse_float(self.box_ymin, "Y 軸下限")
-            hi = _parse_float(self.box_ymax, "Y 軸上限")
+            lo = parse_float(self.box_ymin, "Y 軸下限")
+            hi = parse_float(self.box_ymax, "Y 軸上限")
         except ValueError as exc:
             self._show_message(str(exc))
             return
@@ -662,7 +463,7 @@ class JVState(ErrorState):
             return
         finally:
             self.loading = False
-        self.box_png = _png_data_url(png)
+        self.box_png = png_data_url(png)
 
     # ---------- JV 曲線 ----------
     @rx.event
@@ -699,8 +500,8 @@ class JVState(ErrorState):
             self._show_message("請至少勾選一個方向（FW 或 RV）")
             return
         try:
-            lo = _parse_float(self.curve_ymin, "Y 軸下限")
-            hi = _parse_float(self.curve_ymax, "Y 軸上限")
+            lo = parse_float(self.curve_ymin, "Y 軸下限")
+            hi = parse_float(self.curve_ymax, "Y 軸上限")
         except ValueError as exc:
             self._show_message(str(exc))
             return
@@ -717,4 +518,4 @@ class JVState(ErrorState):
             return
         finally:
             self.loading = False
-        self.curve_png = _png_data_url(png)
+        self.curve_png = png_data_url(png)

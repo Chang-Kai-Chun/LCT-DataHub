@@ -1,9 +1,10 @@
 """A 區 JV 頁面：五個分頁依序操作（上傳與面積 → 分組 → Excel → Box 圖 → JV 曲線）。"""
 import reflex as rx
 
+from front.components.grouping import grouping_adjust, grouping_settings
 from front.components.layout import layout
-from front.enums import BOX_FILTER_PARAMS, Direction, DirectionMode, GroupMode, JVParam, JVTab, Route
-from front.states.jv_state import UPLOAD_ID, BoxRow, FileRow, GroupCond, JVState
+from front.enums import BOX_FILTER_PARAMS, Direction, DirectionMode, JVParam, JVTab, Route
+from front.states.jv_state import UPLOAD_ID, BoxRow, FileRow, JVState
 
 
 # ---------- 共用小元件 ----------
@@ -33,11 +34,7 @@ def _file_row(f: FileRow) -> rx.Component:
 def _job_summary() -> rx.Component:
     """上傳結果：樣品、略過的檔案、面積狀態、檔案清單。"""
     return rx.vstack(
-        rx.hstack(
-            rx.badge(f"工作 {JVState.job_id}", variant="soft"),
-            rx.text(f"{JVState.files.length()} 個檔案、{JVState.samples.length()} 個樣品", size="2"),
-            align="center",
-        ),
+        rx.text(f"工作編號 {JVState.job_id}", size="1", color=rx.color("gray", 10)),
         rx.flex(rx.foreach(JVState.samples, lambda s: rx.badge(s, variant="outline")), wrap="wrap", gap="1"),
         rx.cond(
             JVState.skipped.length() > 0,
@@ -94,9 +91,13 @@ def _upload_tab() -> rx.Component:
                 rx.vstack(
                     rx.icon("upload", size=28, color=rx.color("gray", 10)),
                     rx.text("拖曳檔案到這裡，或點選選擇檔案", size="2"),
-                    rx.text("只接受 .csv，檔名格式如 G1 FW 432.csv", size="1", color=rx.color("gray", 10)),
+                    rx.text(
+                        "只接受 .csv，檔名格式如 G1 FW 432.csv 或 G1FW432.csv（空格可有可無）",
+                        size="1", color=rx.color("gray", 10),
+                    ),
                     align="center",
                     spacing="1",
+                    width="100%",
                 ),
                 id=UPLOAD_ID,
                 multiple=True,
@@ -122,9 +123,55 @@ def _upload_tab() -> rx.Component:
             ),
             rx.text("重新上傳會開始新的工作，目前的分組與設定會清除。", size="1", color=rx.color("gray", 10)),
         ),
-        rx.cond(JVState.has_job, _section("讀取結果", _job_summary())),
+        rx.cond(JVState.has_job, _result_card()),
         spacing="3",
         width="100%",
+    )
+
+
+def _next_button(label: str, tab: JVTab, disabled: rx.Var | bool = False) -> rx.Component:
+    """「下一步」按鈕：切到下一個分頁。"""
+    return rx.button(
+        label, rx.icon("arrow-right", size=18), size="3", disabled=disabled, on_click=JVState.go_to(tab.value),
+    )
+
+
+def _result_card() -> rx.Component:
+    """讀取結果（加粗框線與大標題），並提供「下一步：前往分組」。"""
+    ok = JVState.area_confirmed
+    return rx.card(
+        rx.vstack(
+            rx.hstack(
+                rx.cond(
+                    ok,
+                    rx.icon("circle-check", size=32, color=rx.color("green", 9)),
+                    rx.icon("circle-alert", size=32, color=rx.color("amber", 9)),
+                ),
+                rx.vstack(
+                    rx.heading(
+                        rx.cond(ok, "讀取完成", "讀取完成，請確認有效面積"),
+                        size="6",
+                    ),
+                    rx.text(f"{JVState.files.length()} 個檔案、{JVState.samples.length()} 個樣品", size="3"),
+                    spacing="0",
+                ),
+                rx.spacer(),
+                rx.cond(
+                    ok,
+                    _next_button("下一步：前往分組", JVTab.GROUPING),
+                    rx.button("確認有效面積", size="3", color_scheme="amber", on_click=JVState.open_area_dialog),
+                ),
+                align="center",
+                width="100%",
+            ),
+            rx.divider(),
+            _job_summary(),
+            spacing="3",
+            width="100%",
+        ),
+        width="100%",
+        border=rx.cond(ok, f"2px solid {rx.color('green', 8)}", f"2px solid {rx.color('amber', 8)}"),
+        background=rx.cond(ok, rx.color("green", 2), rx.color("amber", 2)),
     )
 
 
@@ -203,136 +250,35 @@ def _area_notice_dialog() -> rx.Component:
     )
 
 
-# ---------- 2. 分組 ----------
-def _sample_chip(sample: rx.Var) -> rx.Component:
-    """樣品卡片：點選後再按條件框的「放到這裡」。"""
-    return rx.button(
-        sample,
-        size="1",
-        variant=rx.cond(JVState.selected_sample == sample, "solid", "outline"),
-        on_click=JVState.pick_sample(sample),
-    )
-
-
-def _cond_box(cond: GroupCond, index: rx.Var) -> rx.Component:
-    """條件框。"""
-    return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.text(cond.name, weight="bold"),
-                rx.badge(cond.samples.length(), variant="soft"),
-                rx.spacer(),
-                rx.icon_button(
-                    rx.icon("trash-2", size=14), size="1", variant="ghost", color_scheme="red",
-                    on_click=JVState.remove_condition(index),
+# ---------- 2. 分組（畫面元件與 B 區共用：components/grouping.py） ----------
+def _missing_callout() -> rx.Component:
+    """條件中列出、但找不到該方向檔案的樣品。"""
+    return rx.cond(
+        JVState.missing.length() > 0,
+        rx.callout(
+            rx.vstack(
+                rx.text("以下樣品列在條件中，但找不到該方向的檔案："),
+                rx.foreach(
+                    JVState.missing,
+                    lambda m: rx.text(f"{m.condition}：{m.sample} {m.direction}", size="2"),
                 ),
-                width="100%",
-                align="center",
+                spacing="1",
             ),
-            rx.flex(rx.foreach(cond.samples, _sample_chip), wrap="wrap", gap="1", min_height="2em"),
-            rx.button(
-                "放到這裡", size="1", variant="soft", width="100%",
-                disabled=JVState.selected_sample == "",
-                on_click=JVState.move_to(index),
-            ),
-            spacing="2",
-            width="100%",
+            icon="info",
+            color_scheme="amber",
         ),
     )
 
 
 def _grouping_tab() -> rx.Component:
-    """分組：預填（平均分配／自訂／自動）→ 點選調整 → 確定。"""
+    """分組：設定（平均分配／使用者自訂／自動）→ 點選微調 → 確定。"""
     return rx.cond(
         JVState.ready,
         rx.vstack(
-            _section(
-                "預填",
-                _labeled(
-                    "分組方式",
-                    rx.select([m.value for m in GroupMode], value=JVState.group_mode, on_change=JVState.set_group_mode),
-                ),
-                _labeled(
-                    "條件名稱",
-                    rx.input(
-                        value=JVState.group_names, on_change=JVState.set_group_names,
-                        placeholder="以逗號分隔，例如 Ref, A, B", width="24em",
-                    ),
-                ),
-                rx.cond(
-                    JVState.group_mode == GroupMode.CUSTOM.value,
-                    _labeled(
-                        "自訂",
-                        rx.text_area(
-                            value=JVState.custom_text, on_change=JVState.set_custom_text,
-                            placeholder="每行一個條件，例如\nRef: G1-G4\nA: G5-G8, G10",
-                            width="24em", rows="5",
-                        ),
-                    ),
-                ),
-                rx.text(
-                    "平均分配需要條件名稱；自訂用上方文字框（條件名稱欄不使用）；自動為每 4 個樣品一組。",
-                    size="1", color=rx.color("gray", 10),
-                ),
-                rx.hstack(
-                    rx.button("預填", on_click=JVState.preview_grouping),
-                    rx.button("只建立空白條件", variant="soft", on_click=JVState.blank_grouping),
-                ),
-            ),
-            _section(
-                "調整分組",
-                rx.text("點選樣品卡片（變成實心），再按條件框的「放到這裡」；按「移回這裡」放回未分配區。", size="2"),
-                rx.hstack(
-                    rx.input(value=JVState.new_cond_name, on_change=JVState.set_new_cond_name, placeholder="新條件名稱"),
-                    rx.button(rx.icon("plus", size=14), "新增條件", variant="soft", on_click=JVState.add_condition),
-                ),
-                # 未分配區
-                rx.card(
-                    rx.vstack(
-                        rx.hstack(
-                            rx.text("未分配", weight="bold"),
-                            rx.badge(JVState.unassigned.length(), color_scheme=rx.cond(JVState.unassigned.length() > 0, "red", "green")),
-                            align="center",
-                        ),
-                        rx.flex(rx.foreach(JVState.unassigned, _sample_chip), wrap="wrap", gap="1", min_height="2em"),
-                        rx.button(
-                            "移回這裡", size="1", variant="soft", color_scheme="gray",
-                            disabled=JVState.selected_sample == "", on_click=JVState.move_to_unassigned,
-                        ),
-                        spacing="2",
-                        width="100%",
-                    ),
-                    background=rx.color("gray", 2),
-                    width="100%",
-                ),
-                rx.grid(rx.foreach(JVState.conditions, _cond_box), columns="3", spacing="3", width="100%"),
-                rx.hstack(
-                    rx.button(rx.icon("check", size=16), "確定分組", on_click=JVState.confirm_grouping, disabled=~JVState.can_confirm_groups),
-                    rx.cond(
-                        JVState.groups_confirmed,
-                        rx.badge("已確認", color_scheme="green"),
-                        rx.cond(
-                            JVState.unassigned.length() > 0,
-                            rx.text("尚未分配：" + JVState.unassigned.join("、"), size="2", color=rx.color("red", 10)),
-                        ),
-                    ),
-                    align="center",
-                ),
-                rx.cond(
-                    JVState.missing.length() > 0,
-                    rx.callout(
-                        rx.vstack(
-                            rx.text("以下樣品列在條件中，但找不到該方向的檔案："),
-                            rx.foreach(
-                                JVState.missing,
-                                lambda m: rx.text(f"{m.condition}：{m.sample} {m.direction}", size="2"),
-                            ),
-                            spacing="1",
-                        ),
-                        icon="info",
-                        color_scheme="amber",
-                    ),
-                ),
+            grouping_settings(JVState),
+            rx.cond(
+                JVState.conditions.length() > 0,
+                grouping_adjust(JVState, _next_button("下一步：下載 Excel", JVTab.EXCEL), _missing_callout()),
             ),
             spacing="3",
             width="100%",
@@ -359,7 +305,14 @@ def _excel_tab() -> rx.Component:
                 ~JVState.groups_confirmed,
                 rx.callout("尚未確認分組：全部樣品會視為同一個條件。", icon="info", color_scheme="amber"),
             ),
-            rx.button(rx.icon("download", size=16), "下載 Excel", on_click=JVState.download_excel, loading=JVState.loading),
+            rx.hstack(
+                rx.button(
+                    rx.icon("download", size=16), "下載 Excel", size="3",
+                    on_click=JVState.download_excel, loading=JVState.loading,
+                ),
+                rx.cond(JVState.groups_confirmed, _next_button("下一步：Box 圖", JVTab.BOX)),
+                spacing="3",
+            ),
         ),
         _need_ready(),
     )
@@ -488,6 +441,7 @@ def _box_tab() -> rx.Component:
                 ),
                 rx.cond(JVState.box_png != "", rx.image(src=JVState.box_png, max_width="720px", width="100%")),
             ),
+            rx.hstack(rx.spacer(), _next_button("下一步：JV 曲線", JVTab.CURVES), width="100%"),
             spacing="3",
             width="100%",
         ),

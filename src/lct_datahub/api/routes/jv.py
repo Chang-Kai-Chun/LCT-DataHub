@@ -13,18 +13,18 @@ from pydantic import BaseModel
 from lct_datahub.api.common import (
     AreaIn, AreaReportOut, AxisRange, download_response, get_store, json_value, png_response, read_uploads,
 )
+from lct_datahub.api import grouping as shared_grouping  # 路由函式名稱與共用函式同名，以模組名稱呼叫
+from lct_datahub.api.grouping import ConditionModel, ConditionsIn, GroupingIn, GroupingOut
+from lct_datahub.api.grouping import to_core as _to_conditions
 from lct_datahub.api.jobs import Job, JobStore, Section
 from lct_datahub.core.area_check import check_areas
 from lct_datahub.core.jv.area import AREA_OVERRIDE_NOTICE, RECOMPUTED_PARAMS, apply_area
 from lct_datahub.core.jv.box import apply_ranges, box_data, build_box_table, set_keep
 from lct_datahub.core.jv.curve import DEFAULT_Y_RANGE, available_samples, select_curves
 from lct_datahub.core.jv.export import write_excel
-from lct_datahub.core.jv.grouping import group_auto, group_custom, group_even, require_complete, to_grouping
 from lct_datahub.core.jv.integrate import jv_areas, missing_samples
 from lct_datahub.core.jv.reader import read_jv_files
-from lct_datahub.core.jv.types import (
-    Condition, Direction, DirectionMode, GroupingError, GroupMode, JVFile, JVParam, ValueRange,
-)
+from lct_datahub.core.jv.types import Condition, Direction, DirectionMode, GroupingError, JVFile, JVParam, ValueRange
 from lct_datahub.core.plotting import plot_box, plot_jv_curves
 from lct_datahub.core.sample_id import parse_sample_id
 
@@ -33,19 +33,7 @@ router = APIRouter(prefix=f"/api/{SECTION.value}", tags=["A JV"])
 EXCEL_NAME = "ALL_Data.xlsx"
 
 
-# ---------- 資料模型 ----------
-class ConditionModel(BaseModel):
-    """一個條件：名稱＋樣品代號（正規化後的字串，例如 G1）。"""
-
-    name: str
-    samples: list[str]
-
-    @classmethod
-    def from_core(cls, cond: Condition) -> "ConditionModel":
-        """由 core 的 Condition 轉換。"""
-        return cls(name=cond.name, samples=[str(s) for s in cond.samples])
-
-
+# ---------- 資料模型（分組相關的模型在 api/grouping.py，與 B 區共用） ----------
 class JVSettings(BaseModel):
     """工作設定：指定面積（null 為沿用檔內面積）與已確認的分組（null 為尚未分組）。"""
 
@@ -84,34 +72,6 @@ class JVJobOut(BaseModel):
     missing: list[MissingOut]  # 依已確認的分組檢查（FW、RV 都列，前端依需要篩選）
 
 
-class CustomEntry(BaseModel):
-    """使用者自訂分組的一列：條件名稱＋樣品範圍字串（例如 'G1-G4, G7'）。"""
-
-    name: str
-    samples: str
-
-
-class GroupingIn(BaseModel):
-    """分組預填：平均分配用 names、自訂用 entries、自動不需要參數。"""
-
-    mode: GroupMode
-    names: list[str] = []
-    entries: list[CustomEntry] = []
-
-
-class GroupingOut(BaseModel):
-    """分組狀態（給拖拉畫面）：各條件與未分配的樣品。"""
-
-    conditions: list[ConditionModel]
-    unassigned: list[str]
-
-
-class ConditionsIn(BaseModel):
-    """確認分組：所有樣品都要分配，條件名稱不可重複、樣品不可重複歸組。"""
-
-    conditions: list[ConditionModel]
-
-
 class RangeIn(BaseModel):
     """單一參數的篩選範圍；null 表示該端不限制。"""
 
@@ -148,11 +108,6 @@ class CurvePlotIn(BaseModel):
 def _read_raw(paths: tuple[Path, ...]) -> tuple[JVFile, ...]:
     """讀原始檔（快取：原始檔上傳後不會再變）。"""
     return tuple(read_jv_files(list(paths)))
-
-
-def _to_conditions(models: list[ConditionModel]) -> list[Condition]:
-    """把 API 的條件轉成 core 的 Condition（樣品代號會正規化並檢查格式）。"""
-    return [Condition(m.name, tuple(parse_sample_id(s) for s in m.samples)) for m in models]
 
 
 def _state(store: JobStore, job: Job) -> tuple[list[JVFile], JVSettings, list[JVFile]]:
@@ -229,28 +184,14 @@ def _set_area(store: JobStore, job_id: str, area: float | None) -> JVJobOut:
 def _preview(store: JobStore, job_id: str, body: GroupingIn) -> GroupingOut:
     """依分組方式預填條件（不存檔）。"""
     _, _, files = _state(store, store.get(SECTION, job_id))
-    samples = available_samples(files)
-    if body.mode is GroupMode.EVEN:
-        conditions = group_even(samples, body.names)
-    elif body.mode is GroupMode.CUSTOM:
-        conditions = group_custom([(e.name, e.samples) for e in body.entries])
-    else:
-        conditions = group_auto(samples)
-    grouping = to_grouping(samples, conditions)
-    return GroupingOut(
-        conditions=[ConditionModel.from_core(c) for c in grouping.conditions],
-        unassigned=[str(s) for s in grouping.unassigned],
-    )
+    return shared_grouping.preview_grouping(available_samples(files), body)
 
 
 def _confirm(store: JobStore, job_id: str, body: ConditionsIn) -> JVJobOut:
     """驗證並儲存分組。"""
     job = store.get(SECTION, job_id)
     _, settings, files = _state(store, job)
-    # group_custom 檢查名稱與重複歸組；to_grouping 檢查樣品是否存在；require_complete 檢查全部分配
-    conditions = group_custom([(c.name, ",".join(c.samples)) for c in body.conditions])
-    conditions = require_complete(to_grouping(available_samples(files), conditions))
-    models = [ConditionModel.from_core(c) for c in conditions]
+    models = shared_grouping.confirm_grouping(available_samples(files), body)
     store.save_settings(job, settings.model_copy(update={"conditions": models}))
     return _job_out(store, job)
 

@@ -20,7 +20,7 @@ class NavItem:
 NAV_ITEMS = (
     NavItem("首頁", Route.HOME, "house"),
     NavItem("A　JV", Route.JV, "zap"),
-    NavItem("B　暗電流", Route.DARK, "moon", enabled=False),
+    NavItem("B　暗電流", Route.DARK, "moon"),
     NavItem("C　EQE", Route.EQE, "sun", enabled=False),
 )
 

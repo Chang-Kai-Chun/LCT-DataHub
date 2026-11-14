@@ -76,6 +76,23 @@ class JVTab(Enum):
     CURVES = "curves"
 
 
+class ShiftMode(Enum):
+    """B-2 最低點位置處理（core.dark_current.types.ShiftMode）。"""
+
+    SHIFT = "偏移到 0 V"
+    KEEP = "保持原始"
+
+
+class DarkTab(Enum):
+    """暗電流頁面的分頁。"""
+
+    UPLOAD = "upload"
+    SHIFT = "shift"
+    EXCEL = "excel"
+    GROUPING = "grouping"
+    PLOT = "plot"
+
+
 class Route(Enum):
     """頁面路徑。"""
 

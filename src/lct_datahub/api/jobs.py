@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from typing import Callable
 
 from pydantic import BaseModel
 
@@ -61,7 +62,7 @@ class UploadResult:
     """建立工作的結果。"""
 
     job: "Job"
-    skipped: list[str]  # 副檔名不接受而略過的檔案
+    skipped: list[str]  # 副檔名不接受、或不符合功能檔名規則而略過的檔案
 
 
 @dataclass(frozen=True)
@@ -98,16 +99,23 @@ class JobStore:
         self.root = Path(root)
         self._lock = threading.Lock()  # 同一個服務內寫 settings.json 時避免互相覆蓋
 
-    def create(self, section: Section, files: list[tuple[str, bytes]]) -> UploadResult:
+    def create(
+        self,
+        section: Section,
+        files: list[tuple[str, bytes]],
+        accept: Callable[[str], bool] | None = None,
+    ) -> UploadResult:
         """以上傳的 (檔名, 內容) 建立工作；只保留該功能接受的副檔名。
 
+        accept：功能自己的檔名規則（例如暗電流 Excel 檔名須含 _abs），不符合的一併略過。
         檔名只取最後一段（去掉路徑）；沒有可處理的檔案或檔名重複時拋出 UploadError。
         """
         allowed = ALLOWED_SUFFIXES[section]
         kept, skipped = [], []
         for raw_name, content in files:
             name = Path(raw_name.replace("\\", "/")).name  # 防止 ../ 之類的路徑
-            (kept if Path(name).suffix.lower() in allowed and name else skipped).append((name, content))
+            ok = bool(name) and Path(name).suffix.lower() in allowed and (accept is None or accept(name))
+            (kept if ok else skipped).append((name, content))
         if not kept:
             raise UploadError(f"沒有可處理的檔案（接受：{'、'.join(sorted(allowed))}）")
         names = [n for n, _ in kept]

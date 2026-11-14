@@ -29,6 +29,51 @@ def test_parse_normalizes_sample_and_direction():
 
 
 @pytest.mark.parametrize(
+    "name, expected",
+    [
+        ("G5RV235.csv", ("G5", Direction.RV, (2, 3, 5))),  # 完全沒有空格
+        ("G5 RV235.csv", ("G5", Direction.RV, (2, 3, 5))),  # 混合
+        ("G5RV 235.csv", ("G5", Direction.RV, (2, 3, 5))),
+        ("i05fw236", ("I5", Direction.FW, (2, 3, 6))),  # 小寫、前導零
+        ("Qwe13FW62", ("QWE13", Direction.FW, (6, 2))),  # 3 個字母的代號
+        ("G1  FW   432.csv", ("G1", Direction.FW, (4, 3, 2))),  # 多個空格
+    ],
+)
+def test_parse_without_spaces(name, expected):
+    """三段之間的空格可有可無（2026-11-13）。"""
+    r = parse_jv_filename(name)
+    assert (str(r.sample), r.direction, r.pixels) == expected
+    assert r.filename == name
+
+
+def test_no_space_and_spaced_are_duplicates():
+    """G5RV235 與 G5 RV 236 是同一樣品同一方向：視為重複。"""
+    with pytest.raises(JVFileError) as exc:
+        parse_jv_filenames(["G5RV235.csv", "G5 RV 236.csv"])
+    assert exc.value.reason is FailureReason.DUPLICATE
+
+
+@pytest.mark.parametrize(
+    "name, reason",
+    [
+        ("G1432.csv", FailureReason.MISSING_DIRECTION),  # 沒空格又沒方向：數字全算進樣品編號
+        ("G1FWD432.csv", FailureReason.MISSING_DIRECTION),  # FWD 不是 FW
+        ("G1 FWD 432.csv", FailureReason.MISSING_DIRECTION),
+        ("G1x FW 43.csv", FailureReason.BAD_FORMAT),  # 代號後面多了字母
+        ("ABCD1FW43.csv", FailureReason.BAD_FORMAT),  # 代號超過 3 個字母
+        ("G1FW.csv", FailureReason.MISSING_PIXELS),
+        ("G1FW417.csv", FailureReason.INVALID_PIXEL),
+        ("G1FW43x.csv", FailureReason.INVALID_PIXEL),
+    ],
+)
+def test_parse_failures_without_spaces(name, reason):
+    """沒有空格的寫法，失敗原因與有空格時一致。"""
+    with pytest.raises(JVFileError) as exc:
+        parse_jv_filename(name)
+    assert exc.value.reason is reason
+
+
+@pytest.mark.parametrize(
     "name, reason",
     [
         ("G1 432.csv", FailureReason.MISSING_DIRECTION),

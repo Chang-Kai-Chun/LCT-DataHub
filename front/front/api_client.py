@@ -3,9 +3,11 @@
 Reflex 後端（Python）呼叫 FastAPI，瀏覽器不直接連 FastAPI，因此不需要 CORS。
 所有失敗都轉成 ApiError，由 ErrorState 顯示警告視窗。
 """
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 
@@ -113,6 +115,22 @@ async def post_bytes(path: str, body: Any) -> bytes:
 async def get_bytes(path: str, params: Any = None) -> bytes:
     """GET 並回傳二進位內容（Excel、zip）。"""
     return (await request(Method.GET, path, params=params)).content
+
+
+def _filename_from_header(resp: httpx.Response, fallback: str) -> str:
+    """從 Content-Disposition 取出檔名（支援 filename*=utf-8''… 的中文檔名）；取不到時用 fallback。"""
+    header = resp.headers.get("content-disposition", "")
+    encoded = re.search(r"filename\*=(?:utf-8|UTF-8)''([^;]+)", header)
+    if encoded:
+        return unquote(encoded.group(1).strip())
+    plain = re.search(r'filename="?([^";]+)"?', header)
+    return plain.group(1).strip() if plain else fallback
+
+
+async def get_file(path: str, fallback_name: str, params: Any = None) -> tuple[str, bytes]:
+    """GET 下載檔案，回傳 (伺服器給的檔名, 內容)；檔名依回應而定（例如單一 xlsx 或 zip）。"""
+    resp = await request(Method.GET, path, params=params)
+    return _filename_from_header(resp, fallback_name), resp.content
 
 
 async def upload(path: str, uploads: list[tuple[str, bytes]], content_type: str) -> Any:
