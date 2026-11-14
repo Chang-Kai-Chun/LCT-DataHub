@@ -76,6 +76,14 @@ class JVTab(Enum):
     CURVES = "curves"
 
 
+class Section(Enum):
+    """API 的功能區；value 為網址與專案 jobs 的鍵（api/jobs.py 的 Section）。"""
+
+    JV = "jv"
+    DARK = "dark"
+    EQE = "eqe"
+
+
 class ShiftMode(Enum):
     """B-2 最低點位置處理（core.dark_current.types.ShiftMode）。"""
 
@@ -97,6 +105,8 @@ class Route(Enum):
     """頁面路徑。"""
 
     HOME = "/"
+    LOGIN = "/login"
+    PROJECTS = "/projects"
     JV = "/jv"
     DARK = "/dark"
     EQE = "/eqe"

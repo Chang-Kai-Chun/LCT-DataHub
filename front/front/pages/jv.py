@@ -121,7 +121,10 @@ def _upload_tab() -> rx.Component:
                 ),
                 rx.button("清除選擇", variant="soft", color_scheme="gray", on_click=rx.clear_selected_files(UPLOAD_ID)),
             ),
-            rx.text("重新上傳會開始新的工作，目前的分組與設定會清除。", size="1", color=rx.color("gray", 10)),
+            rx.text(
+                "上傳到目前專案；重新上傳會取代這個專案的 A 區資料（分組與設定清除，舊資料夾保留在主機上）。",
+                size="1", color=rx.color("gray", 10),
+            ),
         ),
         rx.cond(JVState.has_job, _result_card()),
         spacing="3",
@@ -512,7 +515,7 @@ TABS = (
 )
 
 
-@rx.page(route=Route.JV.value, title="A JV｜LCT DataHub")
+@rx.page(route=Route.JV.value, title="A JV｜LCT DataHub", on_load=[JVState.require_project, JVState.sync_project])
 def jv_page() -> rx.Component:
     """JV 頁面。"""
     return layout(

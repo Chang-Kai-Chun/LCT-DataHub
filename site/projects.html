@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lct. 專案</title>
+<script>
+  (function () {
+    var t; try { t = localStorage.getItem('lct-theme'); } catch (e) {}
+    if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+    // 從登入頁過來：先蓋著深藍，再淡出（登入轉場的後半段）
+    try {
+      if (sessionStorage.getItem('lct-from-login')) {
+        sessionStorage.removeItem('lct-from-login');
+        document.documentElement.classList.add('from-login');
+      }
+    } catch (e) {}
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="lct.css">
+<script src="lct.js" defer></script>
+</head>
+<body>
+<div class="app">
+
+  <!-- 側欄（各頁相同，只有 aria-current 不同） -->
+  <nav class="sidebar" aria-label="主選單">
+    <a class="brand" href="projects.html">
+      <svg class="mark" viewBox="0 0 100 100" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round"><polygon class="face" points="50,6 42,64 86,48" stroke="none"></polygon><path d="M50 6 L14 52 L50 94 L86 48 Z M14 52 L42 64 L86 48 M50 6 L42 64 L50 94"></path></svg>
+      <span class="wordmark">lct<span class="dot">.</span></span>
+    </a>
+    <div class="session">
+      <span class="label">使用者／專案</span>
+      <span class="user">Gino</span>
+      <span class="project">2026-11 鈍化層比較</span>
+      <span class="links"><a href="projects.html">切換專案</a><a href="index.html">登出</a></span>
+    </div>
+    <ul class="nav">
+      <li><a href="projects.html" aria-current="page"><span class="bar"></span>專案</a></li>
+    </ul>
+    <ul class="nav">
+      <li><a href="#"><span class="bar"></span><span class="letter">a.</span>JV</a></li>
+      <li><a href="dark.html"><span class="bar"></span><span class="letter">b.</span>暗電流</a></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">c.</span>EQE<span class="tag">未開放</span></span></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">d.</span>Noise<span class="tag">未開放</span></span></li>
+    </ul>
+    <ul class="nav">
+      <li><a href="e.html"><span class="bar"></span><span class="letter">e.</span>PD 數據整合</a></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">f.</span>色票</span></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">g.</span>報告輸出</span></li>
+    </ul>
+    <div class="spacer"></div>
+    <div class="row"><button type="button" class="theme-toggle" data-theme-toggle>深色模式</button><a class="small" href="tokens.html">設計變數</a></div>
+  </nav>
+
+  <main class="content">
+    <header class="page-head">
+      <h1 class="big-title">專案</h1>
+    </header>
+
+    <!-- 目前專案：獨立一條帶狀區，與清單分開 -->
+    <section class="section rule" aria-labelledby="cur-title" style="padding-bottom: 28px; border-bottom: 1px solid var(--line);">
+      <div class="row" style="align-items: baseline; gap: 16px;">
+        <span class="mono small muted" style="letter-spacing: .08em;">目前專案</span>
+        <h2 id="cur-title" style="margin: 0; font-family: var(--head); font-weight: 600; font-size: 32px; letter-spacing: -0.02em;">2026-11 鈍化層比較</h2>
+        <span class="mono small muted">建立 2026-11-14 21:40</span>
+      </div>
+      <div class="row" style="gap: 40px; align-items: flex-start;">
+        <div class="field">
+          <span class="label">條件</span>
+          <div class="row" style="gap: 8px;">
+            <span class="chip">ref</span><span class="chip">1 mol%</span><span class="chip">2 mol%</span><span class="chip">3 mol%</span><span class="chip">4 mol%</span>
+            <button type="button" class="btn sm" style="border-style: dashed;">修改條件</button>
+          </div>
+        </div>
+        <div class="field">
+          <span class="label">已上傳</span>
+          <div class="row" style="gap: 6px; font-family: var(--head); font-weight: 800; font-size: 18px;">
+            <span style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: var(--ink); color: var(--bg);">a.</span>
+            <span style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: var(--ink); color: var(--bg);">b.</span>
+            <span style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); color: var(--muted);">c.</span>
+            <span style="width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border: 1px solid var(--line); color: var(--muted);">d.</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 我的專案 -->
+    <section class="section" aria-labelledby="list-title">
+      <div class="section-head">
+        <h2 id="list-title" style="font-family: var(--head); font-weight: 600; font-size: 24px;">我的專案</h2>
+        <div class="end"><button type="button" class="btn primary" data-open-dialog>＋ 新增專案</button></div>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>專案</th><th>條件</th><th>已上傳</th><th>建立時間</th><th></th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="font-weight: 700;">2026-11 鈍化層比較</td>
+              <td>ref、1 mol%、2 mol%、3 mol%、4 mol%</td>
+              <td style="font-family: var(--head); font-weight: 800;">a. b.</td>
+              <td class="mono small">2026-11-14 21:40</td>
+              <td class="small muted" style="text-align: right;">目前開啟</td>
+            </tr>
+            <tr>
+              <td style="font-weight: 700;">[專案名稱]</td>
+              <td>Ref、New</td>
+              <td style="font-family: var(--head); font-weight: 800;">a.</td>
+              <td class="mono small">[建立時間]</td>
+              <td style="text-align: right;"><a href="#" style="font-weight: 700;">開啟 →</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 載入中示意 -->
+    <div class="loading muted small">
+      <svg class="octa" width="40" height="40" viewBox="0 0 100 100" aria-hidden="true" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round">
+        <polygon class="face" points="50,6 42,64 86,48" stroke="none"></polygon>
+        <g class="back" stroke-width="2" stroke-dasharray="4 4"><path d="M50 6 L58 38 L50 94"></path><path d="M14 52 L58 38 L86 48"></path></g>
+        <g stroke-width="3">
+          <path class="edge" pathLength="1" d="M50 6 L14 52"></path>
+          <path class="edge" pathLength="1" d="M50 6 L42 64" style="animation-delay: .08s"></path>
+          <path class="edge" pathLength="1" d="M50 6 L86 48" style="animation-delay: .16s"></path>
+          <path class="edge" pathLength="1" d="M14 52 L42 64" style="animation-delay: .24s"></path>
+          <path class="edge" pathLength="1" d="M42 64 L86 48" style="animation-delay: .32s"></path>
+          <path class="edge" pathLength="1" d="M14 52 L50 94" style="animation-delay: .40s"></path>
+          <path class="edge" pathLength="1" d="M42 64 L50 94" style="animation-delay: .48s"></path>
+          <path class="edge" pathLength="1" d="M86 48 L50 94" style="animation-delay: .56s"></path>
+        </g>
+      </svg>
+      <span>讀取專案清單中…（載入動畫示意）</span>
+    </div>
+  </main>
+</div>
+
+<!-- 新增專案對話框：先問條件數量，再出現 N 個格子 -->
+<div class="overlay" id="new-project" hidden>
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <div class="row" style="align-items: baseline;">
+      <h2 id="dlg-title">新增專案</h2>
+      <span class="mono small muted" data-step-text></span>
+    </div>
+
+    <div data-step="1" class="section" style="gap: 20px;">
+      <div class="field">
+        <label for="proj-name">專案名稱</label>
+        <input id="proj-name" class="input" type="text" placeholder="例如 2026-11 鈍化層比較">
+      </div>
+      <div class="field">
+        <span class="label" id="count-label">條件數量</span>
+        <div class="stepper" role="group" aria-labelledby="count-label">
+          <button type="button" aria-label="減少" data-dec>−</button>
+          <output aria-live="polite">3</output>
+          <button type="button" aria-label="增加" data-inc>＋</button>
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close>取消</button>
+        <button type="button" class="btn primary" data-next>下一步：輸入名稱</button>
+      </div>
+    </div>
+
+    <div data-step="2" class="section" hidden>
+      <div data-slots class="section" style="gap: 12px;"></div>
+      <p class="small muted" style="margin: 0;">各區分組只能選用這些條件，之後可在「目前專案」修改。</p>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-back>← 上一步</button>
+        <button type="button" class="btn primary" data-close>建立並開啟</button>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

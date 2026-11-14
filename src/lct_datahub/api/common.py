@@ -4,12 +4,13 @@ import zipfile
 from enum import Enum
 from pathlib import Path
 
-from fastapi import Request, UploadFile
+from fastapi import Depends, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from matplotlib.figure import Figure
 from pydantic import BaseModel
 
 from lct_datahub.api.jobs import JobStore
+from lct_datahub.api.projects import Project
 from lct_datahub.core.area_check import AreaReport
 from lct_datahub.core.plotting import figure_to_png
 
@@ -28,6 +29,15 @@ class MediaType:
 def get_store(request: Request) -> JobStore:
     """取得 app 上的 JobStore（create_app 時建立）。"""
     return request.app.state.store
+
+
+def upload_project(
+    user: str = Query(..., description="使用者名稱"),
+    project: str = Query(..., description="專案名稱"),
+    store: JobStore = Depends(get_store),
+) -> Project:
+    """上傳路由用：取得要放入工作的專案（不存在回 404）。"""
+    return store.workspace.get_project(user, project)
 
 
 async def read_uploads(files: list[UploadFile]) -> list[tuple[str, bytes]]:

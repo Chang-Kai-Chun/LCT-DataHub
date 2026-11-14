@@ -3,6 +3,7 @@
 伺服器（FastAPI）保存工作資料夾與設定（面積、偏移方式、元件分組）；這裡只保存畫面需要的內容。
 API 的設定是一次送出 area 與 shift_mode 兩項，因此兩者都由這裡記住並一起送出。
 分組邏輯與 A 區相同（GroupingMixin），分組單位是「元件」（G1-1、G1-2 → G1），只影響畫圖勾選清單的排列。
+工作放在目前專案底下（G-4）：上傳時帶 user、project；頁面載入時帶出專案已有的 B 區結果。
 所有 API 呼叫都是 async，失敗時開啟 ErrorState 的警告視窗。
 """
 import re
@@ -12,10 +13,12 @@ import reflex as rx
 
 from front import api_client as api
 from front.api_client import ApiError
-from front.enums import DarkTab, ErrorKind, ShiftMode
+from front.enums import DarkTab, ErrorKind, Section, ShiftMode
 from front.states.common import AreaRow, fmt, parse_float, png_data_url
-from front.states.error_state import ErrorState
 from front.states.grouping import GroupingMixin
+from front.states.session import SessionState
+
+SECTION = Section.DARK
 
 UPLOAD_ID = "dark_upload"
 UPLOAD_TYPE = "application/octet-stream"  # 副檔名有 txt、csv、dat、xlsx、xls，統一用二進位上傳
@@ -80,12 +83,13 @@ def _block(title: str, devices: list[str], by_device: dict[str, list[str]]) -> P
     return PlotBlock(title, [n for c in columns for n in c.curves], columns)
 
 
-class DarkState(GroupingMixin, ErrorState):
-    """暗電流頁面的狀態（ErrorState 的子狀態，共用警告視窗；分組狀態來自 GroupingMixin，依元件分組）。"""
+class DarkState(GroupingMixin, SessionState):
+    """暗電流頁面的狀態（SessionState 的子狀態：讀得到使用者與專案，共用警告視窗；分組狀態來自 GroupingMixin）。"""
 
     # 共用
     tab: str = DarkTab.UPLOAD.value
     loading: bool = False
+    loaded_project: str = ""  # 目前畫面內容屬於哪個「使用者/專案」（換專案時清除）
 
     # 上傳與工作
     job_id: str = ""
@@ -258,6 +262,7 @@ class DarkState(GroupingMixin, ErrorState):
         self.area_override = fmt(settings.get("area"))
         self.shift_mode = settings.get("shift_mode") or ShiftMode.KEEP.value
         self.samples = data["devices"]  # GroupingMixin 的分組單位：元件
+        self._load_choices(data["project_conditions"])  # 專案統一的條件名稱
         self._load_conditions(settings.get("conditions"))
         # 沒有改面積時，area_from_file = False 代表檔內沒有面積（明志反推）；改面積後全部都是 False，不再列出
         if not self.area_override:
@@ -294,27 +299,65 @@ class DarkState(GroupingMixin, ErrorState):
         """目前已套用的指定面積（沒有則為 None）。"""
         return float(self.area_override) if self.area_override else None
 
-    # ---------- 上傳 ----------
+    # ---------- 專案（G-4） ----------
+    def _project_key(self) -> str:
+        """目前的「使用者/專案」。"""
+        return f"{self.user}/{self.project}"
+
+    def _auto_area_confirmed(self) -> bool:
+        """上傳時可直接確認面積：面積一致、且都讀自檔內（明志的面積是反推的，須讓使用者確認）。"""
+        return self.area_uniform and not self.derived_sources
+
     @rx.event
-    async def handle_upload(self, files: list[rx.UploadFile]):
-        """上傳暗電流檔（PD-QE、明志）建立新工作；面積不一致或含反推面積時開啟面積確認視窗。"""
-        if not files:
-            self._show_message("請先選擇檔案")
+    async def sync_project(self):
+        """頁面載入：帶出目前專案的 B 區結果（換專案或其他分頁重新上傳時，先清除畫面）。"""
+        if not self.user or not self.project:
             return
-        uploads = [(f.filename or f.name or "", await f.read()) for f in files]
-        self.reset()
+        project = await self._refresh_project()
+        if project is None:
+            return
+        job_id = project["jobs"].get(SECTION.value, "")
+        if self.loaded_project != self._project_key() or job_id != self.job_id:
+            self.reset()
+            self.loaded_project = self._project_key()
+        if not job_id:
+            return
         self.loading = True
         yield
         try:
-            data = await api.upload("/dark/jobs", uploads, UPLOAD_TYPE)
+            data = await api.get_json(f"/dark/jobs/{job_id}")
         except ApiError as err:
             self._handle_error(err)
             return
         finally:
             self.loading = False
         self._apply_job(data)
+        self.area_confirmed = bool(data["settings"].get("area_confirmed")) or self._auto_area_confirmed()
+
+    # ---------- 上傳 ----------
+    @rx.event
+    async def handle_upload(self, files: list[rx.UploadFile]):
+        """上傳暗電流檔（PD-QE、明志）到目前專案；面積不一致或含反推面積時開啟面積確認視窗。"""
+        if not files:
+            self._show_message("請先選擇檔案")
+            return
+        uploads = [(f.filename or f.name or "", await f.read()) for f in files]
+        self.reset()
+        self.loaded_project = self._project_key()
+        self.loading = True
+        yield
+        try:
+            params = {"user": self.user, "project": self.project}
+            data = await api.upload("/dark/jobs", uploads, UPLOAD_TYPE, params)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        self.project_jobs = {**self.project_jobs, SECTION.value: data["job_id"]}
+        self._apply_job(data)
         # 面積一致、且都讀自檔內才直接確認；否則讓使用者確認（明志的面積是反推的，須提示）
-        self.area_confirmed = self.area_uniform and not self.derived_sources
+        self.area_confirmed = self._auto_area_confirmed()
         self.area_dialog_open = not self.area_confirmed
         yield rx.clear_selected_files(UPLOAD_ID)
 

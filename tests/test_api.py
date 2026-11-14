@@ -1,7 +1,8 @@
-"""FastAPI 路由測試：以實際測試檔走完 A、B、C 的流程，並檢查錯誤回應格式。"""
+"""FastAPI 路由測試：以實際測試檔走完 A、B、C 的流程，並檢查錯誤回應格式；另測使用者與專案（G-4）。"""
 import io
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,18 +12,30 @@ from lct_datahub.api.main import create_app
 ROOT = Path(__file__).resolve().parent.parent
 JV_DIR, JD_DIR, EQE_DIR = ROOT / "JV_test_file", ROOT / "JD_test_file", ROOT / "EQE_test_file"
 PNG_MAGIC = b"\x89PNG"
+USER, PROJECT = "Tester", "2026-11 測試 1 mol%"  # 專案名稱含中文、空格與 %，測試網址編碼
+PROJECT_CONDITIONS = ["Ref", "0.2%", "A", "B"]
+UPLOAD_PARAMS = {"user": USER, "project": PROJECT}
 
 
 @pytest.fixture
 def client(tmp_path) -> TestClient:
-    """每個測試用自己的工作資料夾。"""
-    return TestClient(create_app(tmp_path))
+    """每個測試用自己的資料資料夾，並先建立一位使用者與一個專案。"""
+    c = TestClient(create_app(tmp_path))
+    assert c.post("/api/users", json={"name": USER}).status_code == 200
+    res = c.post(f"/api/users/{USER}/projects", json={"name": PROJECT, "conditions": PROJECT_CONDITIONS})
+    assert res.status_code == 200
+    return c
+
+
+def _project_url() -> str:
+    """專案的 API 網址（名稱做 URL 編碼）。"""
+    return f"/api/users/{quote(USER, safe='')}/projects/{quote(PROJECT, safe='')}"
 
 
 def _upload(client: TestClient, section: str, paths: list[Path]):
-    """上傳檔案並回傳回應。"""
+    """上傳檔案到測試專案並回傳回應。"""
     files = [("files", (p.name, p.read_bytes())) for p in paths]
-    return client.post(f"/api/{section}/jobs", files=files)
+    return client.post(f"/api/{section}/jobs", files=files, params=UPLOAD_PARAMS)
 
 
 def _files(folder: Path) -> list[Path]:
@@ -48,15 +61,16 @@ def test_unknown_job_is_404(client, job_id):
 
 def test_upload_rejects_no_valid_files_and_duplicates(client):
     """沒有可處理的檔案、檔名重複：400。"""
-    res = client.post("/api/eqe/jobs", files=[("files", ("a.jpg", b"x"))])
+    res = client.post("/api/eqe/jobs", files=[("files", ("a.jpg", b"x"))], params=UPLOAD_PARAMS)
     assert res.status_code == 400 and res.json()["kind"] == "input"
-    res = client.post("/api/eqe/jobs", files=[("files", ("a.txt", b"x")), ("files", ("a.txt", b"y"))])
+    files = [("files", ("a.txt", b"x")), ("files", ("a.txt", b"y"))]
+    res = client.post("/api/eqe/jobs", files=files, params=UPLOAD_PARAMS)
     assert res.status_code == 400 and "重複" in res.json()["message"]
 
 
 def test_bad_file_returns_file_error(client):
     """內容無法辨識：422，附檔名、原因、期望、實際；檔名的路徑部分會被去掉。"""
-    res = client.post("/api/eqe/jobs", files=[("files", ("../evil.txt", b"hello\tworld"))])
+    res = client.post("/api/eqe/jobs", files=[("files", ("../evil.txt", b"hello\tworld"))], params=UPLOAD_PARAMS)
     body = res.json()
     assert res.status_code == 422 and body["kind"] == "file"
     assert body["filename"] == "evil.txt" and body["reason"] and body["expected"] and body["actual"]
@@ -100,11 +114,12 @@ def test_dark_flow(client):
     url = f"/api/dark/jobs/{job['job_id']}"
     # PD-QE 檔內 4.5 mm²；明志由 |I|/J 反推也是 0.045 cm²，所以一致
     assert len(job["curves"]) == 58 and job["area_report"]["uniform_value"] == 0.045
-    assert job["settings"] == {"area": None, "shift_mode": "保持原始", "conditions": None}
+    assert job["settings"] == {"area": None, "shift_mode": "保持原始", "area_confirmed": False, "conditions": None}
     assert not any(c["is_shifted"] for c in job["curves"])
 
     shifted = client.put(f"{url}/settings", json={"shift_mode": "偏移到 0 V", "area": 0.05}).json()
     assert sum(c["is_shifted"] for c in shifted["curves"]) == 40
+    assert shifted["settings"]["area_confirmed"]
     assert {c["area"] for c in shifted["curves"]} == {0.05}
     assert client.put(f"{url}/settings", json={"area": 0}).status_code == 400
 
@@ -147,11 +162,11 @@ def test_dark_upload_skips_excel_without_abs(client):
     """上傳時 Excel 檔名沒有 _abs 的略過（列在 skipped），其餘照常讀取。"""
     txt = next(p for p in JD_DIR.iterdir() if p.suffix == ".txt")
     files = [("files", (txt.name, txt.read_bytes())), ("files", ("no_mark.xlsx", b"x")), ("files", ("~$t_abs.xlsx", b"x"))]
-    job = client.post("/api/dark/jobs", files=files).json()
+    job = client.post("/api/dark/jobs", files=files, params=UPLOAD_PARAMS).json()
     assert job["skipped"] == ["no_mark.xlsx", "~$t_abs.xlsx"]
     assert {c["source"] for c in job["curves"]} == {txt.name}
     # 只有不符合規則的檔案：400
-    res = client.post("/api/dark/jobs", files=[("files", ("no_mark.xls", b"x"))])
+    res = client.post("/api/dark/jobs", files=[("files", ("no_mark.xls", b"x"))], params=UPLOAD_PARAMS)
     assert res.status_code == 400 and res.json()["kind"] == "input"
 
 
@@ -169,11 +184,15 @@ def test_jv_flow(client):
     # 尚未分組時不能做 Box
     assert client.post(f"{url}/box/table", json={}).status_code == 400
 
-    # 預填：自動每 4 個一組；平均分配名稱不可重複
+    # 預填：自動每 4 個一組，名稱依序取專案條件；平均分配名稱不可重複、須在專案條件中
     preview = client.post(f"{url}/grouping/preview", json={"mode": "自動"}).json()
     assert [len(c["samples"]) for c in preview["conditions"]] == [4, 4, 1] and preview["unassigned"] == []
+    assert [c["name"] for c in preview["conditions"]] == PROJECT_CONDITIONS[:3]
     bad = client.post(f"{url}/grouping/preview", json={"mode": "平均分配", "names": ["A", "A"]})
     assert bad.status_code == 400
+    outside = client.post(f"{url}/grouping/preview", json={"mode": "平均分配", "names": ["A", "Z"]})
+    assert outside.status_code == 400 and "Z" in outside.json()["message"]
+    assert job["project_conditions"] == PROJECT_CONDITIONS
 
     # 確認分組：有未分配樣品時 400；完整時存檔
     partial = {"conditions": [{"name": "Ref", "samples": job["samples"][:3]}]}
@@ -209,3 +228,69 @@ def test_jv_flow(client):
 
     res = client.get(f"{url}/excel", params={"directions": ["FW", "RV"]})
     assert res.headers["content-type"].startswith("application/vnd.openxmlformats")
+
+
+# ---------- G-4 使用者與專案 ----------
+def test_users(client):
+    """使用者清單掃資料夾；名稱重複（不分大小寫）或含不允許的字元 400。"""
+    assert client.get("/api/users").json() == [USER]
+    assert client.post("/api/users", json={"name": "小明"}).json() == ["Tester", "小明"]
+    assert client.post("/api/users", json={"name": "tester"}).status_code == 400
+    for bad in ["", "a/b", "a:b", "..", "CON"]:
+        assert client.post("/api/users", json={"name": bad}).status_code == 400, bad
+
+
+def test_projects(client):
+    """建立、列出、取得專案；找不到使用者或專案 404；上傳專案不存在 404。"""
+    assert client.post(f"/api/users/{USER}/projects", json={"name": PROJECT.upper()}).status_code == 400
+    dup = client.post(f"/api/users/{USER}/projects", json={"name": "P2", "conditions": ["Ref", "ref"]})
+    assert dup.status_code == 400
+    client.post(f"/api/users/{USER}/projects", json={"name": "P2"})
+    names = [p["name"] for p in client.get(f"/api/users/{USER}/projects").json()]
+    assert sorted(names) == sorted([PROJECT, "P2"])
+    project = client.get(_project_url()).json()
+    assert project["conditions"] == PROJECT_CONDITIONS and project["jobs"] == {}
+
+    assert client.get("/api/users/nobody/projects").status_code == 404
+    assert client.get(f"/api/users/{USER}/projects/none").status_code == 404
+    res = client.post("/api/eqe/jobs", files=[("files", ("a.txt", b"x"))], params={"user": USER, "project": "none"})
+    assert res.status_code == 404
+
+
+def test_grouping_needs_project_conditions(client):
+    """專案沒有條件時不能分組（400，提示到專案頁新增）。"""
+    client.post(f"/api/users/{USER}/projects", json={"name": "Empty"})
+    if not JD_DIR.exists():
+        pytest.skip("沒有 JD_test_file")
+    txt = next(p for p in JD_DIR.iterdir() if p.suffix == ".txt")
+    files = [("files", (txt.name, txt.read_bytes()))]
+    job = client.post("/api/dark/jobs", files=files, params={"user": USER, "project": "Empty"}).json()
+    res = client.post(f"/api/dark/jobs/{job['job_id']}/grouping/preview", json={"mode": "自動"})
+    assert res.status_code == 400 and "專案" in res.json()["message"]
+
+
+@needs(JD_DIR)
+def test_project_jobs_and_condition_edit(client):
+    """上傳後專案記錄目前工作、重新上傳取代；條件改名會更新分組；刪除已使用的條件 400。"""
+    first = _upload(client, "dark", _files(JD_DIR)).json()
+    assert client.get(_project_url()).json()["jobs"] == {"dark": first["job_id"]}
+    job = _upload(client, "dark", _files(JD_DIR)).json()
+    assert client.get(_project_url()).json()["jobs"] == {"dark": job["job_id"]} != {"dark": first["job_id"]}
+
+    url = f"/api/dark/jobs/{job['job_id']}"
+    preview = client.post(f"{url}/grouping/preview", json={"mode": "平均分配", "names": ["A", "B"]}).json()
+    client.put(f"{url}/conditions", json={"conditions": preview["conditions"]})
+
+    # 改名 A → New、刪除未使用的 0.2%、新增 C；分組中的 A 一起改成 New
+    edits = [{"old": "Ref", "new": "Ref"}, {"old": "A", "new": "New"}, {"old": "B", "new": "B"}, {"old": None, "new": "C"}]
+    project = client.put(f"{_project_url()}/conditions", json={"conditions": edits}).json()
+    assert project["conditions"] == ["Ref", "New", "B", "C"]
+    after = client.get(url).json()
+    assert [c["name"] for c in after["settings"]["conditions"]] == ["New", "B"]
+    assert after["project_conditions"] == ["Ref", "New", "B", "C"]
+
+    # 刪除已被分組使用的 B：400，條件清單不變
+    keep = [{"old": "Ref", "new": "Ref"}, {"old": "New", "new": "New"}]
+    res = client.put(f"{_project_url()}/conditions", json={"conditions": keep})
+    assert res.status_code == 400 and "B" in res.json()["message"]
+    assert client.get(_project_url()).json()["conditions"] == ["Ref", "New", "B", "C"]

@@ -1,6 +1,7 @@
 """G-2 工作資料夾：每次上傳建立一個工作（job），原始檔、輸出與設定都放在自己的資料夾。
 
-資料夾結構：<work_root>/<功能>/<工作編號>/
+工作一律放在專案底下（G-4，見 projects.py），專案記錄各區「目前的工作」；重新上傳會取代，舊資料夾保留。
+資料夾結構：<data_root>/users/<使用者>/projects/<專案>/<功能>/<工作編號>/
   raw/            上傳的原始檔
   output/         Excel、zip 等輸出
   meta.json       上傳順序（檔名清單）
@@ -19,6 +20,8 @@ from pathlib import Path
 from typing import Callable
 
 from pydantic import BaseModel
+
+from lct_datahub.api.projects import PROJECTS_DIR, USERS_DIR, Project, Workspace
 
 
 class Section(Enum):
@@ -92,20 +95,22 @@ class Job:
 
 
 class JobStore:
-    """建立、取得工作，以及讀寫工作設定。"""
+    """建立、取得工作，以及讀寫工作設定；使用者與專案由 workspace 管理。"""
 
     def __init__(self, root: Path):
-        """root 為工作資料夾根目錄（不存在會自動建立）。"""
+        """root 為資料根目錄（不存在會自動建立）。"""
         self.root = Path(root)
+        self.workspace = Workspace(self.root)
         self._lock = threading.Lock()  # 同一個服務內寫 settings.json 時避免互相覆蓋
 
     def create(
         self,
         section: Section,
         files: list[tuple[str, bytes]],
+        project: Project,
         accept: Callable[[str], bool] | None = None,
     ) -> UploadResult:
-        """以上傳的 (檔名, 內容) 建立工作；只保留該功能接受的副檔名。
+        """以上傳的 (檔名, 內容) 在專案中建立工作，並設為該區目前的工作；只保留該功能接受的副檔名。
 
         accept：功能自己的檔名規則（例如暗電流 Excel 檔名須含 _abs），不符合的一併略過。
         檔名只取最後一段（去掉路徑）；沒有可處理的檔案或檔名重複時拋出 UploadError。
@@ -124,21 +129,31 @@ class JobStore:
             raise UploadError(f"檔案重複：{'、'.join(duplicated)}")
 
         job_id = f"{datetime.now():%Y%m%d-%H%M%S}-{uuid.uuid4().hex[:8]}"
-        job = Job(job_id, section, self.root / section.value / job_id)
+        job = Job(job_id, section, project.folder / section.value / job_id)
         job.raw_dir.mkdir(parents=True)
         for name, content in kept:
             (job.raw_dir / name).write_bytes(content)
         (job.folder / FileName.META).write_text(json.dumps({"files": names}, ensure_ascii=False), encoding="utf-8")
+        self.workspace.set_job(project, section.value, job_id)
         return UploadResult(job, [n for n, _ in skipped])
 
     def get(self, section: Section, job_id: str) -> Job:
-        """取得既有工作；編號格式不符或不存在時拋出 JobNotFoundError。"""
+        """取得既有工作（在所有使用者的專案中找）；編號格式不符或不存在時拋出 JobNotFoundError。"""
         if not _JOB_ID.match(job_id):
             raise JobNotFoundError(f"找不到工作：{job_id}")
-        folder = self.root / section.value / job_id
-        if not (folder / FileName.META).is_file():
-            raise JobNotFoundError(f"找不到工作：{job_id}")
-        return Job(job_id, section, folder)
+        pattern = f"{USERS_DIR}/*/{PROJECTS_DIR}/*/{section.value}/{job_id}"
+        for folder in self.root.glob(pattern):
+            if (folder / FileName.META).is_file():
+                return Job(job_id, section, folder)
+        raise JobNotFoundError(f"找不到工作：{job_id}")
+
+    def project_of(self, job: Job) -> Project:
+        """工作所屬的專案。"""
+        return self.workspace.project_of(job.folder)
+
+    def project_conditions(self, job: Job) -> list[str]:
+        """工作所屬專案的統一條件名稱。"""
+        return self.project_of(job).info.conditions
 
     def load_settings[T: BaseModel](self, job: Job, model: type[T]) -> T:
         """讀取工作設定；還沒存過就回傳 model 的預設值。"""

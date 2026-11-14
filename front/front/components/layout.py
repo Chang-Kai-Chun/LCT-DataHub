@@ -1,10 +1,11 @@
-"""全站版面：左側導覽列＋右側內容，最外層放錯誤警告視窗。"""
+"""全站版面：左側導覽列（含目前使用者與專案）＋右側內容，最外層放錯誤警告視窗。"""
 from dataclasses import dataclass
 
 import reflex as rx
 
 from front.components.error_dialog import error_dialog
 from front.enums import Route
+from front.states.session import SessionState
 
 
 @dataclass(frozen=True)
@@ -19,6 +20,7 @@ class NavItem:
 
 NAV_ITEMS = (
     NavItem("首頁", Route.HOME, "house"),
+    NavItem("專案", Route.PROJECTS, "folder-open"),
     NavItem("A　JV", Route.JV, "zap"),
     NavItem("B　暗電流", Route.DARK, "moon"),
     NavItem("C　EQE", Route.EQE, "sun", enabled=False),
@@ -52,11 +54,39 @@ def _nav_link(item: NavItem) -> rx.Component:
     )
 
 
+def _session_box() -> rx.Component:
+    """目前的使用者與專案；可切換專案或登出。"""
+    return rx.box(
+        rx.vstack(
+            rx.hstack(rx.icon("user", size=14), rx.text(SessionState.user, size="2", weight="bold"), align="center"),
+            rx.hstack(
+                rx.icon("folder", size=14),
+                rx.text(
+                    rx.cond(SessionState.has_project, SessionState.project, "（尚未開啟專案）"),
+                    size="2", word_break="break-all",
+                ),
+                align="center",
+            ),
+            rx.hstack(
+                rx.link("切換專案", href=Route.PROJECTS.value, size="1"),
+                rx.link("登出", size="1", color_scheme="gray", on_click=SessionState.logout, cursor="pointer"),
+                spacing="3",
+            ),
+            spacing="1",
+        ),
+        padding="0.5em 0.75em",
+        border_radius="6px",
+        background=rx.color("gray", 3),
+        width="100%",
+    )
+
+
 def sidebar() -> rx.Component:
     """左側導覽列。"""
     return rx.vstack(
         rx.heading("LCT DataHub", size="5", padding="0.5em 0.75em"),
         rx.text("V6", size="1", color=rx.color("gray", 10), padding_left="0.75em", margin_top="-0.75em"),
+        rx.cond(SessionState.logged_in, _session_box()),
         rx.divider(),
         *[_nav_link(item) for item in NAV_ITEMS],
         rx.spacer(),

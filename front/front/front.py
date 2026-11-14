@@ -7,6 +7,6 @@
 import reflex as rx
 
 # 匯入頁面模組時，@rx.page 會自動註冊頁面
-from front.pages import dark, home, jv  # noqa: F401
+from front.pages import dark, home, jv, login, projects  # noqa: F401
 
 app = rx.App()  # 主題設定在 rxconfig.py 的 RadixThemesPlugin

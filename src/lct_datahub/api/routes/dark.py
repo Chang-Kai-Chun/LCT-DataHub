@@ -10,8 +10,9 @@ from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
 from lct_datahub.api.common import (
-    AreaReportOut, AxisRange, download_response, get_store, png_response, read_uploads,
+    AreaReportOut, AxisRange, download_response, get_store, png_response, read_uploads, upload_project,
 )
+from lct_datahub.api.projects import Project
 from lct_datahub.api.grouping import (
     ConditionModel, ConditionsIn, GroupingIn, GroupingOut, confirm_grouping, preview_grouping,
 )
@@ -39,8 +40,12 @@ class DarkSettingsIn(BaseModel):
 
 
 class DarkSettings(DarkSettingsIn):
-    """工作設定（存在 settings.json）：另含已確認的元件分組（null 為尚未分組，只影響畫圖勾選的排列）。"""
+    """工作設定（存在 settings.json）：另含已確認的元件分組（null 為尚未分組，只影響畫圖勾選的排列）。
 
+    area_confirmed：使用者已在面積視窗做過選擇（重開專案時不必再問）。
+    """
+
+    area_confirmed: bool = False
     conditions: list[ConditionModel] | None = None
 
 
@@ -69,6 +74,7 @@ class DarkJobOut(BaseModel):
     area_report: AreaReportOut  # 依檔內（原始）面積檢查
     area_notice: str = AREA_OVERRIDE_NOTICE  # 改用指定面積前要給使用者看的警告
     devices: list[str]  # 所有元件（分組用的樣品清單），依代號排序
+    project_conditions: list[str]  # 專案統一的條件名稱（分組只能用這些）
     curves: list[DarkCurveOut]
 
 
@@ -104,6 +110,7 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Dar
         settings=settings,
         area_report=AreaReportOut.from_report(check_areas(dark_areas(raw))),
         devices=[str(d) for d in device_list(curves)],
+        project_conditions=store.project_conditions(job),
         curves=[
             DarkCurveOut(
                 name=c.name, device=_device_text(c.name), instrument=c.instrument.value, source=c.source, area=c.area,
@@ -115,9 +122,9 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Dar
     )
 
 
-def _create(store: JobStore, uploads: list[tuple[str, bytes]]) -> DarkJobOut:
-    """建立工作並讀檔；Excel 檔名沒有 _abs 的略過（is_dark_file）。"""
-    result = store.create(SECTION, uploads, accept=is_dark_file)
+def _create(store: JobStore, uploads: list[tuple[str, bytes]], project: Project) -> DarkJobOut:
+    """在專案中建立工作並讀檔（取代專案原本的 B 區工作）；Excel 檔名沒有 _abs 的略過（is_dark_file）。"""
+    result = store.create(SECTION, uploads, project, accept=is_dark_file)
     return _job_out(store, result.job, result.skipped)
 
 
@@ -138,19 +145,20 @@ def _update(store: JobStore, job_id: str, body: DarkSettingsIn) -> DarkJobOut:
     if body.area is not None:
         apply_dark_area([], body.area)  # 只做驗證：面積必須是大於 0 的數值
     settings = store.load_settings(job, DarkSettings)
-    store.save_settings(job, settings.model_copy(update=body.model_dump()))
+    store.save_settings(job, settings.model_copy(update={**body.model_dump(), "area_confirmed": True}))
     return _job_out(store, job)
 
 
 def _preview(store: JobStore, job_id: str, body: GroupingIn) -> GroupingOut:
     """依分組方式預填元件分組（不存檔）。"""
-    return preview_grouping(_devices(store, store.get(SECTION, job_id)), body)
+    job = store.get(SECTION, job_id)
+    return preview_grouping(_devices(store, job), body, store.project_conditions(job))
 
 
 def _confirm(store: JobStore, job_id: str, body: ConditionsIn) -> DarkJobOut:
     """驗證並儲存元件分組（所有元件都須分配）。"""
     job = store.get(SECTION, job_id)
-    models = confirm_grouping(_devices(store, job), body)
+    models = confirm_grouping(_devices(store, job), body, store.project_conditions(job))
     settings = store.load_settings(job, DarkSettings)
     store.save_settings(job, settings.model_copy(update={"conditions": models}))
     return _job_out(store, job)
@@ -173,10 +181,14 @@ def _dark_png(store: JobStore, job_id: str, body: DarkPlotIn):
 
 # ---------- 路由 ----------
 @router.post("/jobs", response_model=DarkJobOut)
-async def create_job(files: list[UploadFile] = File(...), store: JobStore = Depends(get_store)) -> DarkJobOut:
-    """上傳暗電流檔（PD-QE、明志）並讀取；回應含面積檢查結果。"""
+async def create_job(
+    files: list[UploadFile] = File(...),
+    project: Project = Depends(upload_project),
+    store: JobStore = Depends(get_store),
+) -> DarkJobOut:
+    """上傳暗電流檔（PD-QE、明志）到專案（?user=&project=）並讀取；回應含面積檢查結果。"""
     uploads = await read_uploads(files)
-    return await asyncio.to_thread(_create, store, uploads)
+    return await asyncio.to_thread(_create, store, uploads, project)
 
 
 @router.get("/jobs/{job_id}", response_model=DarkJobOut)

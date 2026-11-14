@@ -1,7 +1,9 @@
 """分組畫面的共用狀態（mixin）：A JV 依樣品分組、B 暗電流依元件分組，邏輯完全相同。
 
 流程：分組方式（平均分配／使用者自訂／自動）→ API 預填（不存檔）→ 點選微調 → 確定分組（存到伺服器）。
-使用方式：class XxxState(GroupingMixin, ErrorState)，並覆寫下方「子類別需提供」的方法。
+條件名稱只能從專案統一的條件中選（G-4，cond_choices）；自動分組依序取專案的條件名稱。
+使用方式：class XxxState(GroupingMixin, SessionState)，並覆寫下方「子類別需提供」的方法；
+子類別的 _apply_job 需呼叫 _load_choices(專案條件) 與 _load_conditions(已確認分組)。
 """
 import re
 from dataclasses import dataclass, field
@@ -70,6 +72,7 @@ class GroupingMixin(rx.State, mixin=True):
     """分組狀態；samples 為要分組的代號清單（JV 為樣品、暗電流為元件），依代號排序。"""
 
     samples: list[str] = []
+    cond_choices: list[str] = []  # 專案統一的條件名稱（只能從這裡選）
 
     # 分組設定：選條件數 → 出現 N 個名稱框（自訂另有「從 [ ] 到 [ ]」的編號範圍）
     group_mode: str = GroupMode.EVEN.value
@@ -103,6 +106,20 @@ class GroupingMixin(rx.State, mixin=True):
         """分組確認後，子類別可做額外處理。"""
 
     # ---------- 狀態更新（給子類別的 _apply_job 呼叫） ----------
+    def _load_choices(self, choices: list[str]) -> None:
+        """載入專案的條件名稱；名稱框中不在清單內（被改名或刪除）的清空，空白的依序補上未使用的名稱。"""
+        self.cond_choices = list(choices)
+        self.cond_count = max(1, min(self.cond_count, len(choices) or 1))
+        names = [n if n in choices else "" for n in (self.cond_names + [""] * self.cond_count)[: self.cond_count]]
+        self.cond_names = self._fill_names(names)
+        if self.new_cond_name not in choices:
+            self.new_cond_name = ""
+
+    def _fill_names(self, names: list[str]) -> list[str]:
+        """把空白的名稱框依序補上還沒用到的專案條件。"""
+        unused = iter(c for c in self.cond_choices if c not in names)
+        return [n or next(unused, "") for n in names]
+
     def _load_conditions(self, conditions: list[dict] | None) -> None:
         """載入伺服器上已確認的分組（None 表示尚未分組）；並帶入自訂範圍的預設字母。"""
         self.groups_confirmed = bool(conditions)
@@ -120,9 +137,20 @@ class GroupingMixin(rx.State, mixin=True):
 
     @rx.var
     def count_options(self) -> list[str]:
-        """條件數選單：1 到 min(樣品數, MAX_COND_COUNT)。"""
-        top = max(1, min(len(self.samples), MAX_COND_COUNT))
+        """條件數選單：1 到 min(樣品數, 專案條件數, MAX_COND_COUNT)。"""
+        top = max(1, min(len(self.samples), len(self.cond_choices), MAX_COND_COUNT))
         return [str(n) for n in range(1, top + 1)]
+
+    @rx.var
+    def has_choices(self) -> bool:
+        """專案已定義條件名稱（沒有時不能分組）。"""
+        return len(self.cond_choices) > 0
+
+    @rx.var
+    def unused_choices(self) -> list[str]:
+        """微調時可新增的條件：專案條件中還沒出現在條件框的。"""
+        used = {c.name for c in self.conditions}
+        return [c for c in self.cond_choices if c not in used]
 
     @rx.var
     def cond_indices(self) -> list[int]:
@@ -169,7 +197,7 @@ class GroupingMixin(rx.State, mixin=True):
 
         default_prefix = next(iter(sample_prefixes(self.samples)), "")
         self.cond_count = n
-        self.cond_names = _resize(self.cond_names)
+        self.cond_names = self._fill_names(_resize(self.cond_names))
         self.range_from = _resize(self.range_from)
         self.range_to = _resize(self.range_to)
         self.range_prefix = [p or default_prefix for p in _resize(self.range_prefix, default_prefix)]
@@ -266,10 +294,10 @@ class GroupingMixin(rx.State, mixin=True):
     # ---------- 微調 ----------
     @rx.event
     def add_condition(self) -> None:
-        """新增一個空白條件框。"""
+        """新增一個空白條件框（名稱從專案條件中選）。"""
         name = self.new_cond_name.strip()
         if not name:
-            self._show_message("請輸入條件名稱")
+            self._show_message("請選擇要新增的條件")
             return
         if any(c.name == name for c in self.conditions):
             self._show_message(f"條件名稱「{name}」已存在")

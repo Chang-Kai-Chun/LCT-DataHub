@@ -12,7 +12,9 @@ from pydantic import BaseModel
 
 from lct_datahub.api.common import (
     AreaIn, AreaReportOut, AxisRange, download_response, get_store, json_value, png_response, read_uploads,
+    upload_project,
 )
+from lct_datahub.api.projects import Project
 from lct_datahub.api import grouping as shared_grouping  # 路由函式名稱與共用函式同名，以模組名稱呼叫
 from lct_datahub.api.grouping import ConditionModel, ConditionsIn, GroupingIn, GroupingOut
 from lct_datahub.api.grouping import to_core as _to_conditions
@@ -35,9 +37,13 @@ EXCEL_NAME = "ALL_Data.xlsx"
 
 # ---------- 資料模型（分組相關的模型在 api/grouping.py，與 B 區共用） ----------
 class JVSettings(BaseModel):
-    """工作設定：指定面積（null 為沿用檔內面積）與已確認的分組（null 為尚未分組）。"""
+    """工作設定：指定面積（null 為沿用檔內面積）與已確認的分組（null 為尚未分組）。
+
+    area_confirmed：使用者已在面積視窗做過選擇（重開專案時不必再問）。
+    """
 
     area: float | None = None
+    area_confirmed: bool = False
     conditions: list[ConditionModel] | None = None
 
 
@@ -68,6 +74,7 @@ class JVJobOut(BaseModel):
     area_notice: str = AREA_OVERRIDE_NOTICE
     recomputed_params: list[JVParam] = list(RECOMPUTED_PARAMS)  # 改面積會重算的參數
     samples: list[str]  # 依數字排序
+    project_conditions: list[str]  # 專案統一的條件名稱（分組只能用這些）
     files: list[JVFileOut]
     missing: list[MissingOut]  # 依已確認的分組檢查（FW、RV 都列，前端依需要篩選）
 
@@ -140,6 +147,7 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> JVJ
         settings=settings,
         area_report=AreaReportOut.from_report(check_areas(jv_areas(raw))),
         samples=[str(s) for s in available_samples(files)],
+        project_conditions=store.project_conditions(job),
         files=[
             JVFileOut(
                 filename=f.name.filename, sample=str(f.name.sample), direction=f.name.direction,
@@ -165,9 +173,9 @@ def _box_table(files: list[JVFile], conditions: list[Condition], body: BoxIn):
 
 
 # ---------- 同步工作：上傳、面積、分組、Excel（在執行緒中執行） ----------
-def _create(store: JobStore, uploads: list[tuple[str, bytes]]) -> JVJobOut:
-    """建立工作並讀檔。"""
-    result = store.create(SECTION, uploads)
+def _create(store: JobStore, uploads: list[tuple[str, bytes]], project: Project) -> JVJobOut:
+    """在專案中建立工作並讀檔（取代專案原本的 A 區工作）。"""
+    result = store.create(SECTION, uploads, project)
     return _job_out(store, result.job, result.skipped)
 
 
@@ -177,21 +185,22 @@ def _set_area(store: JobStore, job_id: str, area: float | None) -> JVJobOut:
     if area is not None:
         apply_area([], area)  # 只做驗證：面積必須是大於 0 的數值
     settings = store.load_settings(job, JVSettings)
-    store.save_settings(job, settings.model_copy(update={"area": area}))
+    store.save_settings(job, settings.model_copy(update={"area": area, "area_confirmed": True}))
     return _job_out(store, job)
 
 
 def _preview(store: JobStore, job_id: str, body: GroupingIn) -> GroupingOut:
     """依分組方式預填條件（不存檔）。"""
-    _, _, files = _state(store, store.get(SECTION, job_id))
-    return shared_grouping.preview_grouping(available_samples(files), body)
+    job = store.get(SECTION, job_id)
+    _, _, files = _state(store, job)
+    return shared_grouping.preview_grouping(available_samples(files), body, store.project_conditions(job))
 
 
 def _confirm(store: JobStore, job_id: str, body: ConditionsIn) -> JVJobOut:
     """驗證並儲存分組。"""
     job = store.get(SECTION, job_id)
     _, settings, files = _state(store, job)
-    models = shared_grouping.confirm_grouping(available_samples(files), body)
+    models = shared_grouping.confirm_grouping(available_samples(files), body, store.project_conditions(job))
     store.save_settings(job, settings.model_copy(update={"conditions": models}))
     return _job_out(store, job)
 
@@ -233,10 +242,14 @@ def _curve_png(store: JobStore, job_id: str, body: CurvePlotIn):
 
 # ---------- 路由：上傳、面積、分組、Excel ----------
 @router.post("/jobs", response_model=JVJobOut)
-async def create_job(files: list[UploadFile] = File(...), store: JobStore = Depends(get_store)) -> JVJobOut:
-    """上傳 JV CSV（檔名如 G1 FW 432.csv）並讀取；檔名或內容有問題回 422。"""
+async def create_job(
+    files: list[UploadFile] = File(...),
+    project: Project = Depends(upload_project),
+    store: JobStore = Depends(get_store),
+) -> JVJobOut:
+    """上傳 JV CSV（檔名如 G1 FW 432.csv）到專案（?user=&project=）並讀取；檔名或內容有問題回 422。"""
     uploads = await read_uploads(files)
-    return await asyncio.to_thread(_create, store, uploads)
+    return await asyncio.to_thread(_create, store, uploads, project)
 
 
 @router.get("/jobs/{job_id}", response_model=JVJobOut)

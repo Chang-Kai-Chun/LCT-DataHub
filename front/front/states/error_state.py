@@ -12,7 +12,7 @@ from front.enums import ErrorKind
 ERROR_TITLES = {
     ErrorKind.FILE: "檔案有問題，作業已停止",
     ErrorKind.INPUT: "輸入有誤",
-    ErrorKind.NOT_FOUND: "找不到工作",
+    ErrorKind.NOT_FOUND: "找不到資料",  # 工作、使用者或專案
     ErrorKind.CONNECTION: "無法連線到 API",
     ErrorKind.UNKNOWN: "發生錯誤",
 }

@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 
 import httpx
 
@@ -133,10 +133,20 @@ async def get_file(path: str, fallback_name: str, params: Any = None) -> tuple[s
     return _filename_from_header(resp, fallback_name), resp.content
 
 
-async def upload(path: str, uploads: list[tuple[str, bytes]], content_type: str) -> Any:
-    """以 multipart 上傳多個檔案（欄位名稱 files），回傳 JSON。"""
+async def upload(path: str, uploads: list[tuple[str, bytes]], content_type: str, params: Any = None) -> Any:
+    """以 multipart 上傳多個檔案（欄位名稱 files），回傳 JSON；params 放 user、project（G-4）。"""
     files = [("files", (name, data, content_type)) for name, data in uploads]
-    return (await request(Method.POST, path, files=files)).json()
+    return (await request(Method.POST, path, files=files, params=params)).json()
+
+
+def seg(name: str) -> str:
+    """網址中的一段（使用者或專案名稱）做 URL 編碼；名稱可含中文、空格、% 等字元。"""
+    return quote(name, safe="")
+
+
+def project_path(user: str, project: str) -> str:
+    """專案的 API 路徑（不含 /api）。"""
+    return f"/users/{seg(user)}/projects/{seg(project)}"
 
 
 async def health() -> bool:

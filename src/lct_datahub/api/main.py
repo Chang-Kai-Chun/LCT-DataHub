@@ -10,15 +10,15 @@ from fastapi import FastAPI
 from lct_datahub.api.config import load_config
 from lct_datahub.api.errors import register_error_handlers
 from lct_datahub.api.jobs import JobStore
-from lct_datahub.api.routes import dark, eqe, jv
+from lct_datahub.api.routes import dark, eqe, jv, projects
 
 
 def create_app(work_root: Path | None = None) -> FastAPI:
-    """建立 app；work_root 可指定工作資料夾根目錄（測試用），預設讀設定。"""
+    """建立 app；work_root 可指定資料根目錄（測試用），預設讀設定。"""
     app = FastAPI(title="LCT DataHub API", version="0.1.0")
     app.state.store = JobStore(work_root or load_config().work_root)
     register_error_handlers(app)
-    for module in (jv, dark, eqe):
+    for module in (projects, jv, dark, eqe):
         app.include_router(module.router)
 
     @app.get("/api/health", tags=["系統"])

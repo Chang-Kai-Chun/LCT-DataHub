@@ -2,7 +2,7 @@
 
 - 檔案問題（JV、暗電流、EQE）：422，附檔名、原因、期望、實際
 - 使用者輸入不合理（分組、面積、樣品代號、改名、範圍…）：400，附訊息
-- 找不到工作：404
+- 找不到工作、使用者或專案：404
 """
 from enum import Enum
 
@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from lct_datahub.api.jobs import JobNotFoundError, UploadError
+from lct_datahub.api.projects import InvalidNameError, WorkspaceNotFoundError
 from lct_datahub.core.dark_current.types import DarkFileError
 from lct_datahub.core.eqe.types import EqeFileError, EqeNameError
 from lct_datahub.core.jv.types import GroupingError, InvalidAreaError, JVFileError
@@ -27,8 +28,10 @@ class ErrorKind(Enum):
 # 檔案錯誤都有 filename、reason（Enum）、expected、actual 四個屬性
 FILE_ERRORS = (JVFileError, DarkFileError, EqeFileError)
 INPUT_ERRORS = (
-    GroupingError, InvalidAreaError, InvalidSampleIdError, EqeNameError, UploadError, KeyError, ValueError,
+    GroupingError, InvalidAreaError, InvalidSampleIdError, EqeNameError, UploadError, InvalidNameError,
+    KeyError, ValueError,
 )
+NOT_FOUND_ERRORS = (JobNotFoundError, WorkspaceNotFoundError)
 
 
 def _message(exc: Exception) -> str:
@@ -69,4 +72,5 @@ def register_error_handlers(app: FastAPI) -> None:
         app.add_exception_handler(exc_type, _file_error)
     for exc_type in INPUT_ERRORS:
         app.add_exception_handler(exc_type, _input_error)
-    app.add_exception_handler(JobNotFoundError, _not_found)
+    for exc_type in NOT_FOUND_ERRORS:
+        app.add_exception_handler(exc_type, _not_found)

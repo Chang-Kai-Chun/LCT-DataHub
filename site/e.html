@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lct. e. PD 數據整合</title>
+<script>
+  (function () {
+    var t; try { t = localStorage.getItem('lct-theme'); } catch (e) {}
+    if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="lct.css">
+<script src="lct.js" defer></script>
+</head>
+<body>
+<div class="app">
+
+  <nav class="sidebar" aria-label="主選單">
+    <a class="brand" href="projects.html">
+      <svg class="mark" viewBox="0 0 100 100" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="6" stroke-linejoin="round"><polygon class="face" points="50,6 42,64 86,48" stroke="none"></polygon><path d="M50 6 L14 52 L50 94 L86 48 Z M14 52 L42 64 L86 48 M50 6 L42 64 L50 94"></path></svg>
+      <span class="wordmark">lct<span class="dot">.</span></span>
+    </a>
+    <div class="session">
+      <span class="label">使用者／專案</span>
+      <span class="user">Gino</span>
+      <span class="project">2026-11 鈍化層比較</span>
+      <span class="links"><a href="projects.html">切換專案</a><a href="index.html">登出</a></span>
+    </div>
+    <ul class="nav">
+      <li><a href="projects.html"><span class="bar"></span>專案</a></li>
+    </ul>
+    <ul class="nav">
+      <li><a href="#"><span class="bar"></span><span class="letter">a.</span>JV</a></li>
+      <li><a href="dark.html"><span class="bar"></span><span class="letter">b.</span>暗電流</a></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">c.</span>EQE<span class="tag">未開放</span></span></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">d.</span>Noise<span class="tag">未開放</span></span></li>
+    </ul>
+    <ul class="nav">
+      <li><a href="e.html" aria-current="page"><span class="bar"></span><span class="letter">e.</span>PD 數據整合</a></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">f.</span>色票</span></li>
+      <li><span class="disabled"><span class="bar"></span><span class="letter">g.</span>報告輸出</span></li>
+    </ul>
+    <div class="spacer"></div>
+    <div class="row"><button type="button" class="theme-toggle" data-theme-toggle>深色模式</button><a class="small" href="tokens.html">設計變數</a></div>
+  </nav>
+
+  <main class="content">
+    <header class="page-head">
+      <span class="letter" aria-hidden="true">e.</span>
+      <h1>PD 數據整合</h1>
+    </header>
+
+    <!-- 資料齊備狀態列：缺的用橘色 -->
+    <ul class="status" aria-label="資料來源狀態">
+      <li><span class="letter">b.</span>暗電流 · Rsh、Jd<span class="mono small muted">已有</span></li>
+      <li><span class="letter">c.</span>EQE · R<span class="mono small muted">已有</span></li>
+      <li class="missing"><span class="letter">d.</span>Noise · i<sub>n</sub><span class="mono small">缺少：實測 D* 無法計算</span></li>
+    </ul>
+
+    <section class="section">
+      <div class="section-head">
+        <h2>選擇每個條件使用的樣品</h2>
+        <span class="small muted">暗電流與 EQE 樣品各自選擇，不一定是同一顆元件</span>
+      </div>
+
+      <div style="border-top: 2px solid var(--ink);">
+        <div class="e-grid head"><span>條件</span><span>暗電流樣品（b.）</span><span>EQE 樣品（c.）</span><span>D* Shot</span><span>D* Thermal</span></div>
+
+        <div class="e-grid">
+          <span class="cond">ref</span>
+          <div class="select-wrap"><select class="select mono" aria-label="ref 的暗電流樣品"><option>G1-2</option></select><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <div class="select-wrap"><select class="select mono" aria-label="ref 的 EQE 樣品"><option>G1-2</option></select><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <span class="metric"><span class="value">—</span><span class="unit">Jones</span></span>
+          <span class="metric"><span class="value">—</span><span class="unit">Jones</span></span>
+        </div>
+
+        <div class="e-grid">
+          <span class="cond">1 mol%</span>
+          <div class="select-wrap"><select class="select mono" aria-label="1 mol% 的暗電流樣品"><option>G6-1</option></select><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <div class="select-wrap"><select class="select mono" aria-label="1 mol% 的 EQE 樣品"><option>G7-2</option></select><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <span class="metric"><span class="value">—</span><span class="unit">Jones</span></span>
+          <span class="metric"><span class="value">—</span><span class="unit">Jones</span></span>
+        </div>
+
+        <div class="e-grid">
+          <span class="cond">2 mol%</span>
+          <div class="select-wrap"><select class="select mono" aria-label="2 mol% 的暗電流樣品" style="border-color: var(--orange);"><option>請選擇</option></select><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <div class="select-wrap"><select class="select mono" aria-label="2 mol% 的 EQE 樣品"><option>G8-3</option></select><svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg></div>
+          <span class="small muted">先選暗電流樣品</span>
+          <span class="small muted">先選暗電流樣品</span>
+        </div>
+      </div>
+
+      <p class="small muted" style="margin: 0;">數值為空白示意；計算功能尚未實作。Shot：R / √(2qJd)；Thermal：R·√(A·Rsh / 4kT)。</p>
+    </section>
+  </main>
+</div>
+</body>
+</html>

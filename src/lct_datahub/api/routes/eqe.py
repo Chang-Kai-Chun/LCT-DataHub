@@ -9,8 +9,9 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
-from lct_datahub.api.common import AxisRange, download_response, get_store, png_response, read_uploads
+from lct_datahub.api.common import AxisRange, download_response, get_store, png_response, read_uploads, upload_project
 from lct_datahub.api.jobs import Job, JobStore, Section
+from lct_datahub.api.projects import Project
 from lct_datahub.core.eqe.export import write_eqe_excels
 from lct_datahub.core.eqe.integrate import read_eqe_files, rename_curves
 from lct_datahub.core.eqe.select import select_eqe_curves
@@ -103,9 +104,9 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Eqe
     )
 
 
-def _create(store: JobStore, uploads: list[tuple[str, bytes]]) -> EqeJobOut:
-    """建立工作並讀檔。"""
-    result = store.create(SECTION, uploads)
+def _create(store: JobStore, uploads: list[tuple[str, bytes]], project: Project) -> EqeJobOut:
+    """在專案中建立工作並讀檔（取代專案原本的 C 區工作）。"""
+    result = store.create(SECTION, uploads, project)
     return _job_out(store, result.job, result.skipped)
 
 
@@ -142,10 +143,14 @@ def _rplot_png(store: JobStore, job_id: str, body: RplotIn):
 
 # ---------- 路由 ----------
 @router.post("/jobs", response_model=EqeJobOut)
-async def create_job(files: list[UploadFile] = File(...), store: JobStore = Depends(get_store)) -> EqeJobOut:
-    """上傳 EQE 檔（txt、xls、xlsx）並讀取；檔案有問題回 422。"""
+async def create_job(
+    files: list[UploadFile] = File(...),
+    project: Project = Depends(upload_project),
+    store: JobStore = Depends(get_store),
+) -> EqeJobOut:
+    """上傳 EQE 檔（txt、xls、xlsx）到專案（?user=&project=）並讀取；檔案有問題回 422。"""
     uploads = await read_uploads(files)
-    return await asyncio.to_thread(_create, store, uploads)
+    return await asyncio.to_thread(_create, store, uploads, project)
 
 
 @router.get("/jobs/{job_id}", response_model=EqeJobOut)

@@ -163,7 +163,10 @@ def _upload_tab() -> rx.Component:
                 ),
                 rx.button("清除選擇", variant="soft", color_scheme="gray", on_click=rx.clear_selected_files(UPLOAD_ID)),
             ),
-            rx.text("重新上傳會開始新的工作，目前的設定會清除。", size="1", color=rx.color("gray", 10)),
+            rx.text(
+                "上傳到目前專案；重新上傳會取代這個專案的 B 區資料（設定與分組清除，舊資料夾保留在主機上）。",
+                size="1", color=rx.color("gray", 10),
+            ),
         ),
         rx.cond(DarkState.has_job, _result_card()),
         spacing="3",
@@ -528,7 +531,10 @@ TABS = (
 )
 
 
-@rx.page(route=Route.DARK.value, title="B 暗電流｜LCT DataHub")
+@rx.page(
+    route=Route.DARK.value, title="B 暗電流｜LCT DataHub",
+    on_load=[DarkState.require_project, DarkState.sync_project],
+)
 def dark_page() -> rx.Component:
     """暗電流頁面。"""
     return layout(

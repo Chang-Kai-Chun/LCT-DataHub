@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lct. 登入</title>
+<!-- 先決定主題，避免載入時閃一下 -->
+<script>
+  (function () {
+    var t; try { t = localStorage.getItem('lct-theme'); } catch (e) {}
+    if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="lct.css">
+<script src="lct.js" defer></script>
+</head>
+<body>
+<div class="login">
+
+  <!-- 左：字標 -->
+  <section class="hero">
+    <div class="row" style="justify-content: space-between;">
+      <div class="row">
+        <svg class="mark" viewBox="0 0 100 100" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="5" stroke-linejoin="round">
+          <polygon class="face" points="50,6 42,64 86,48" stroke="none"></polygon>
+          <path d="M50 6 L14 52 L50 94 L86 48 Z M14 52 L42 64 L86 48 M50 6 L42 64 L50 94"></path>
+        </svg>
+        <span class="mono small muted" style="letter-spacing: .08em;">LCT DATAHUB · V6</span>
+      </div>
+      <button type="button" class="theme-toggle" data-theme-toggle>深色模式</button>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 20px;">
+      <p class="wordmark">lct<span class="dot">.</span></p>
+      <p class="muted" style="margin: 0; font-size: 18px; max-width: 30em;">實驗室量測資料整合與繪圖：JV、暗電流、EQE、Noise。</p>
+    </div>
+  </section>
+
+  <!-- 右：登入（深藍區塊） -->
+  <section class="panel" aria-labelledby="login-title">
+    <h1 id="login-title">登入</h1>
+
+    <div class="field">
+      <label for="user-select">使用者</label>
+      <!-- 選單吃剩下的寬度，按鈕固定寬度：不會再被擠出去 -->
+      <div class="row nowrap">
+        <div class="select-wrap grow">
+          <select id="user-select" class="select" style="font-size: 18px;">
+            <option>Gino</option>
+            <option>[使用者 2]</option>
+          </select>
+          <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"></path></svg>
+        </div>
+        <a class="btn primary" href="projects.html" data-login style="text-decoration: none;">登入</a>
+      </div>
+    </div>
+
+    <hr>
+
+    <div class="field">
+      <label for="new-user">新增使用者</label>
+      <div class="row nowrap">
+        <input id="new-user" class="input grow" type="text" placeholder="名稱">
+        <button type="button" class="btn">新增</button>
+      </div>
+      <p class="small muted" style="margin: 0;">名稱會成為資料夾名稱，不可包含 \ / : * ? " &lt; &gt; |。移除使用者請在主機上刪除 data/users 中的資料夾。</p>
+    </div>
+  </section>
+</div>
+</body>
+</html>

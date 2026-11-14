@@ -1,6 +1,7 @@
 """A 區 JV 的狀態：上傳 → 面積確認 → 分組 → Excel → Box 圖 → JV 曲線。
 
 伺服器（FastAPI）保存工作資料夾與已確認的設定；這裡只保存畫面需要的內容。
+工作放在目前專案底下（G-4）：上傳時帶 user、project；頁面載入時帶出專案已有的 A 區結果。
 Box 表狀態不存在伺服器（11/06 決定），每次由這裡送出方向、範圍、手動保留。
 所有 API 呼叫都是 async，失敗時開啟 ErrorState 的警告視窗。
 """
@@ -10,10 +11,12 @@ import reflex as rx
 
 from front import api_client as api
 from front.api_client import ApiError
-from front.enums import BOX_FILTER_PARAMS, BoxColumn, Direction, DirectionMode, ErrorKind, JVParam, JVTab
+from front.enums import BOX_FILTER_PARAMS, BoxColumn, Direction, DirectionMode, ErrorKind, JVParam, JVTab, Section
 from front.states.common import AreaRow, fmt, parse_float, png_data_url
-from front.states.error_state import ErrorState
 from front.states.grouping import GroupingMixin
+from front.states.session import SessionState
+
+SECTION = Section.JV
 
 UPLOAD_ID = "jv_upload"
 CSV_TYPE = "text/csv"
@@ -58,12 +61,13 @@ class BoxRow:
     keep: bool = True
 
 
-class JVState(GroupingMixin, ErrorState):
-    """JV 頁面的狀態（ErrorState 的子狀態，共用警告視窗；分組狀態來自 GroupingMixin，依樣品分組）。"""
+class JVState(GroupingMixin, SessionState):
+    """JV 頁面的狀態（SessionState 的子狀態：讀得到使用者與專案，共用警告視窗；分組狀態來自 GroupingMixin）。"""
 
     # 共用
     tab: str = JVTab.UPLOAD.value
     loading: bool = False
+    loaded_project: str = ""  # 目前畫面內容屬於哪個「使用者/專案」（換專案時清除）
 
     # 上傳與工作
     job_id: str = ""
@@ -245,6 +249,7 @@ class JVState(GroupingMixin, ErrorState):
 
         settings = data["settings"]
         self.area_override = fmt(settings.get("area"))
+        self._load_choices(data["project_conditions"])  # GroupingMixin：專案統一的條件名稱
         self._load_conditions(settings.get("conditions"))  # GroupingMixin：已確認的分組
         self.missing = [MissingRow(m["condition"], m["sample"], m["direction"]) for m in data.get("missing", [])]
 
@@ -272,24 +277,59 @@ class JVState(GroupingMixin, ErrorState):
             self._reset_job()
         self._show_error(err)
 
-    # ---------- 上傳 ----------
+    # ---------- 專案（G-4） ----------
+    def _project_key(self) -> str:
+        """目前的「使用者/專案」。"""
+        return f"{self.user}/{self.project}"
+
     @rx.event
-    async def handle_upload(self, files: list[rx.UploadFile]):
-        """上傳 JV CSV（檔名如 G1 FW 432.csv 或 G1FW432.csv）建立新工作；面積不一致時開啟面積確認視窗。"""
-        if not files:
-            self._show_message("請先選擇檔案")
+    async def sync_project(self):
+        """頁面載入：帶出目前專案的 A 區結果（換專案或其他分頁重新上傳時，先清除畫面）。"""
+        if not self.user or not self.project:
             return
-        uploads = [(f.filename or f.name or "", await f.read()) for f in files]
-        self._reset_job()
+        project = await self._refresh_project()
+        if project is None:
+            return
+        job_id = project["jobs"].get(SECTION.value, "")
+        if self.loaded_project != self._project_key() or job_id != self.job_id:
+            self._reset_job()
+            self.loaded_project = self._project_key()
+        if not job_id:
+            return
         self.loading = True
         yield
         try:
-            data = await api.upload("/jv/jobs", uploads, CSV_TYPE)
+            data = await api.get_json(f"/jv/jobs/{job_id}")
         except ApiError as err:
             self._handle_error(err)
             return
         finally:
             self.loading = False
+        self._apply_job(data)
+        # 使用者已在面積視窗選擇過，或面積一致（上傳時自動確認）
+        self.area_confirmed = bool(data["settings"].get("area_confirmed")) or self.area_uniform
+
+    # ---------- 上傳 ----------
+    @rx.event
+    async def handle_upload(self, files: list[rx.UploadFile]):
+        """上傳 JV CSV（檔名如 G1 FW 432.csv 或 G1FW432.csv）到目前專案；面積不一致時開啟面積確認視窗。"""
+        if not files:
+            self._show_message("請先選擇檔案")
+            return
+        uploads = [(f.filename or f.name or "", await f.read()) for f in files]
+        self._reset_job()
+        self.loaded_project = self._project_key()
+        self.loading = True
+        yield
+        try:
+            params = {"user": self.user, "project": self.project}
+            data = await api.upload("/jv/jobs", uploads, CSV_TYPE, params)
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        self.project_jobs = {**self.project_jobs, SECTION.value: data["job_id"]}
         self._apply_job(data)
         # 面積一致就直接確認；不一致時讓使用者選擇
         self.area_confirmed = self.area_uniform

@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lct. 設計變數</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;800&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="lct.css">
+<style>
+  /* 本頁：淺色、深色並排比較（data-theme 放在各自的區塊上） */
+  .compare { display: flex; flex-wrap: wrap; min-height: 100vh; }
+  .compare > section { flex: 1 1 480px; min-width: 0; padding: 48px; display: flex; flex-direction: column; gap: 36px; background: var(--bg); color: var(--ink); }
+  .swatches { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+  .swatch { display: flex; flex-direction: column; gap: 6px; font-family: var(--mono); font-size: 11px; }
+  .swatch div { height: 56px; display: flex; align-items: center; justify-content: center; font-family: var(--body); font-size: 13px; font-weight: 700; }
+  @media (max-width: 760px) { .compare > section { padding: 28px 16px; } }
+</style>
+</head>
+<body>
+<div class="compare">
+  <section data-theme="light" aria-label="淺色">
+    <div class="row" style="justify-content: space-between; align-items: baseline;">
+      <span class="wordmark" style="font-size: 72px;">lct<span class="dot">.</span></span>
+      <a class="mono small" href="projects.html">← 回到原型</a>
+    </div>
+    <div class="swatches">
+      <div class="swatch"><div style="background: var(--bg); border: 1px solid var(--line);"></div>--bg</div>
+      <div class="swatch"><div style="background: var(--ink);"></div>--ink</div>
+      <div class="swatch"><div style="background: var(--muted);"></div>--muted</div>
+      <div class="swatch"><div style="background: var(--line);"></div>--line</div>
+      <div class="swatch"><div style="background: var(--orange); color: var(--on-orange);">需判斷</div>--orange</div>
+      <div class="swatch"><div style="background: var(--navy); color: var(--on-navy);">登入區</div>--navy</div>
+      <div class="swatch"><div style="border: 2px solid var(--error); color: var(--error);">錯誤</div>--error</div>
+      <div class="swatch"><div style="background: var(--surface); border: 1px solid var(--line);"></div>--surface</div>
+    </div>
+    <div class="section" style="gap: 10px; border-top: 1px solid var(--line); padding-top: 20px;">
+      <span style="font-family: var(--head); font-weight: 800; font-size: 40px; letter-spacing: -0.04em; line-height: 1;">b. 暗電流</span>
+      <span>內文 Noto Sans TC：上傳量測檔案，整合成 Excel 並繪圖。</span>
+      <span class="mono">-0.2 ～ 1 V · 1e-10 A/cm² · G7-1_second</span>
+    </div>
+    <div class="row" style="gap: 12px;">
+      <button type="button" class="btn primary">主要按鈕</button>
+      <button type="button" class="btn">次要按鈕</button>
+      <button type="button" class="btn ghost">文字按鈕</button>
+      <button type="button" class="btn warn">已隱藏</button>
+    </div>
+    <div class="loading" style="border-top: 1px solid var(--line); padding-top: 24px; gap: 28px;">
+      <svg class="octa" width="160" height="160" viewBox="0 0 100 100" role="img" aria-label="載入中" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round">
+        <polygon class="face" points="50,6 42,64 86,48" stroke="none"></polygon>
+        <g class="back" stroke-width="1" stroke-dasharray="3 3"><path d="M50 6 L58 38 L50 94"></path><path d="M14 52 L58 38 L86 48"></path></g>
+        <g stroke-width="1.6">
+          <path class="edge" pathLength="1" d="M50 6 L14 52"></path>
+          <path class="edge" pathLength="1" d="M50 6 L42 64" style="animation-delay: .08s"></path>
+          <path class="edge" pathLength="1" d="M50 6 L86 48" style="animation-delay: .16s"></path>
+          <path class="edge" pathLength="1" d="M14 52 L42 64" style="animation-delay: .24s"></path>
+          <path class="edge" pathLength="1" d="M42 64 L86 48" style="animation-delay: .32s"></path>
+          <path class="edge" pathLength="1" d="M14 52 L50 94" style="animation-delay: .40s"></path>
+          <path class="edge" pathLength="1" d="M42 64 L50 94" style="animation-delay: .48s"></path>
+          <path class="edge" pathLength="1" d="M86 48 L50 94" style="animation-delay: .56s"></path>
+        </g>
+      </svg>
+      <div class="section" style="gap: 6px;">
+        <strong>讀取中…</strong>
+        <span class="small muted" style="max-width: 18em;">BX₆ 八面體：前方八條邊依序描邊，背面虛線淡入，最後一面填橘色。系統設定「減少動態效果」時直接顯示完成圖。</span>
+      </div>
+    </div>
+  </section>
+
+  <section data-theme="dark" aria-label="深色">
+    <div class="row" style="justify-content: space-between; align-items: baseline;">
+      <span class="wordmark" style="font-size: 72px;">lct<span class="dot">.</span></span>
+      <span class="mono small muted">深色</span>
+    </div>
+    <div class="swatches">
+      <div class="swatch"><div style="background: var(--bg); border: 1px solid var(--line);"></div>--bg</div>
+      <div class="swatch"><div style="background: var(--ink);"></div>--ink</div>
+      <div class="swatch"><div style="background: var(--muted);"></div>--muted</div>
+      <div class="swatch"><div style="background: var(--line);"></div>--line</div>
+      <div class="swatch"><div style="background: var(--orange); color: var(--on-orange);">需判斷</div>--orange</div>
+      <div class="swatch"><div style="background: var(--navy); color: var(--on-navy);">登入區</div>--navy</div>
+      <div class="swatch"><div style="border: 2px solid var(--error); color: var(--error);">錯誤</div>--error</div>
+      <div class="swatch"><div style="background: var(--surface); border: 1px solid var(--line);"></div>--surface</div>
+    </div>
+    <div class="section" style="gap: 10px; border-top: 1px solid var(--line); padding-top: 20px;">
+      <span style="font-family: var(--head); font-weight: 800; font-size: 40px; letter-spacing: -0.04em; line-height: 1;">b. 暗電流</span>
+      <span>內文 Noto Sans TC：上傳量測檔案，整合成 Excel 並繪圖。</span>
+      <span class="mono">-0.2 ～ 1 V · 1e-10 A/cm² · G7-1_second</span>
+    </div>
+    <div class="row" style="gap: 12px;">
+      <button type="button" class="btn primary">主要按鈕</button>
+      <button type="button" class="btn">次要按鈕</button>
+      <button type="button" class="btn ghost">文字按鈕</button>
+      <button type="button" class="btn warn">已隱藏</button>
+    </div>
+    <div class="loading" style="border-top: 1px solid var(--line); padding-top: 24px; gap: 28px;">
+      <svg class="octa" width="160" height="160" viewBox="0 0 100 100" role="img" aria-label="載入中" fill="none" stroke="currentColor" stroke-linejoin="round" stroke-linecap="round">
+        <polygon class="face" points="50,6 42,64 86,48" stroke="none"></polygon>
+        <g class="back" stroke-width="1" stroke-dasharray="3 3"><path d="M50 6 L58 38 L50 94"></path><path d="M14 52 L58 38 L86 48"></path></g>
+        <g stroke-width="1.6">
+          <path class="edge" pathLength="1" d="M50 6 L14 52"></path>
+          <path class="edge" pathLength="1" d="M50 6 L42 64" style="animation-delay: .08s"></path>
+          <path class="edge" pathLength="1" d="M50 6 L86 48" style="animation-delay: .16s"></path>
+          <path class="edge" pathLength="1" d="M14 52 L42 64" style="animation-delay: .24s"></path>
+          <path class="edge" pathLength="1" d="M42 64 L86 48" style="animation-delay: .32s"></path>
+          <path class="edge" pathLength="1" d="M14 52 L50 94" style="animation-delay: .40s"></path>
+          <path class="edge" pathLength="1" d="M42 64 L50 94" style="animation-delay: .48s"></path>
+          <path class="edge" pathLength="1" d="M86 48 L50 94" style="animation-delay: .56s"></path>
+        </g>
+      </svg>
+      <div class="section" style="gap: 6px;">
+        <strong>讀取中…</strong>
+        <span class="small muted" style="max-width: 18em;">深色模式下橘色稍微調亮，上面一樣放黑字。</span>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>

@@ -42,9 +42,9 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 | E　衍生指標 | 暫緩（D\* 流程已規劃，見 3-3 E） | |
 | 登入、專案、報告輸出 | 已規劃（G-4、G-5，2026-11-14） | 排在 A、B 實測與 commit 之後 |
 | F　色票 | 未開始 | 繪圖暫用 `plotting.py` 內建色盤 |
-| G　裝置紀錄與工作資料夾 | **G-2 工作資料夾已完成**（`api/jobs.py`）；G-1 未開始 | |
-| **API（FastAPI）** | **A、B、C 路由已完成**（208 個 pytest 通過，2026-11-14） | 23 個路由（B 區新增元件分組 2 個），見 3-6；`uv run lct-api` 啟動 |
-| **前端（Reflex）** | **A 頁面製作中、B 頁面已完成**（2026-11-14） | `front/` 為獨立 uv 環境；B 區五個分頁（上傳與面積、最低點偏移、Excel、分組、暗電流圖）已編譯並以真檔走過 API，瀏覽器操作待 Gino 實測；分組狀態與畫面 A、B 共用；C 區未開始 |
+| G　平台功能 | **G-2 工作資料夾**（`api/jobs.py`）、**G-4 登入與專案**（`api/projects.py`，2026-11-14）已完成；G-1、G-3、G-5 未開始 | G-4 前端待 Gino 瀏覽器實測 |
+| **API（FastAPI）** | **A、B、C 與使用者／專案路由已完成**（212 個 pytest 通過，2026-11-14） | 29 個路由（G-4 新增 6 個），見 3-6；`uv run lct-api` 啟動 |
+| **前端（Reflex）** | **A、B 頁面已完成並實測**（2026-11-14，commit `1ea2aaf`）；**登入與專案頁已完成，待實測** | `front/` 為獨立 uv 環境；分組狀態與畫面 A、B 共用；C 區未開始 |
 
 **A 區已完成的內容**
 - **A-1 JV 整合**：檔名解析與失敗檢查、CSV 讀取（依表頭辨識欄位）、有效面積檢查與改用指定面積重算、樣品分組（平均／自訂／自動／手動）、整合與 Excel 輸出（ALL_Data、五張參數 sheet、每檔 sheet）
@@ -530,7 +530,14 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 **G-3　打包 exe（選配）**
 - 可打包成 exe，讓使用者在自己的電腦執行；與網頁版共用同一個核心 package
 
-**G-4　使用者登入與專案　`新`　（2026-11-14 規劃）**
+**G-4　使用者登入與專案　`新`　（2026-11-14 規劃並完成：API `api/projects.py`、`routes/projects.py`；前端 `states/session.py`、`pages/login.py`、`pages/projects.py`）**
+- 實作細節（2026-11-14）：
+  - 上傳路由加 `?user=&project=`，工作建在專案內並設為該區目前的工作；**重新上傳會取代**，舊工作資料夾保留
+  - 開專案（或進入 A、B 頁面）時重新讀取專案，帶出各區目前工作的結果；面積視窗已選擇過的不再詢問（設定加 `area_confirmed`）
+  - 分組的條件名稱**只能從專案條件中選**（API 也會檢查）；**自動分組的名稱依序取專案條件**，組數多於條件數時提示改用其他方式
+  - 修改條件：改名會一併更新各區已確認的分組；被分組使用的條件不能刪除
+  - 名稱即資料夾名稱，可含中文、空格、`%`、`#`（前端做 URL 編碼）；不可含 `\ / : * ? " < > |`，名稱比對不分大小寫
+  - 舊的 `data/jobs/` 不搬移（測試資料），新版不再讀取
 - **登入**：開網頁先選使用者，只有**下拉選單＋新增**，沒有密碼（實驗室區網內使用，彼此信任；日後需要再加 PIN，資料夾結構不變）
   - 瀏覽器記住上次選的使用者，預設選好
   - 新增時檢查名稱不重複、不含 Windows 資料夾不允許的字元（`\ / : * ? " < > |`）
@@ -610,12 +617,13 @@ lct_datahub/
     workspace.py         # G-2
   api/                   # FastAPI：一個服務，多個路由（見 3-6）
     main.py              #   create_app、run（uv run lct-api）
-    config.py            #   工作資料夾根目錄、host、port（可用環境變數覆寫）
-    jobs.py              #   G-2 工作資料夾：建立、取得、設定讀寫
+    config.py            #   資料根目錄（預設 data/）、host、port（可用環境變數覆寫）
+    projects.py          #   G-4 使用者與專案：data/users/<使用者>/projects/<專案>/（2026-11-14）
+    jobs.py              #   G-2 工作資料夾：在專案內建立、取得、設定讀寫
     errors.py            #   core 例外 → HTTP 回應（422／400／404）
     common.py            #   上傳、PNG、下載回應、共用資料模型
     grouping.py          #   分組的 API 模型與預填／確認流程（A 依樣品、B 依元件，2026-11-14）
-    routes/              #   jv.py（A）、dark.py（B）、eqe.py（C）
+    routes/              #   projects.py（G-4）、jv.py（A）、dark.py（B）、eqe.py（C）
 
 front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄 workspace 成員，不在 lct_datahub 內）
   pyproject.toml         #   宣告 reflex、httpx
@@ -627,8 +635,8 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
   front/api_client.py    #   呼叫 FastAPI（httpx，async）；錯誤轉 ApiError；get_file 取伺服器給的下載檔名
   front/enums.py         #   前端 Enum（value 與核心相同）
   front/states/          #   common.py（共用資料列與小工具）、grouping.py（分組 GroupingMixin，A、B 共用）、
-                         #   error_state.py、jv_state.py（A）、dark_state.py（B）
-  front/pages/           #   home.py、jv.py（A）、dark.py（B）
+                         #   error_state.py、session.py（使用者與專案，各區 State 的父狀態）、jv_state.py（A）、dark_state.py（B）
+  front/pages/           #   login.py、projects.py、home.py、jv.py（A）、dark.py（B）
   front/components/      #   layout.py（側欄）、error_dialog.py（警告視窗）、grouping.py（分組畫面，A、B 共用）
   assets/                #   靜態檔案
   .web/                  #   Reflex 編譯產物（已在 front/.gitignore 排除）
@@ -705,20 +713,27 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | 4 | C-2、C-3 的曲線勾選、疊圖、範圍輸入（X 軸由使用者輸入、EQE 軸預設 0–100）、右軸開關與 PNG 下載（`select_eqe_curves`、`plot_eqe`、`plot_rplot`、`figure_to_png`） | `核心已完成` |
 - D Noise：Dark I 與 $R_{sh}$ 輸入欄（沒輸入就不畫參考線）
 - F 色票：選 4–7 色、點色塊複製、預覽 JV 與 EQE 效果、下載色票
-- G-1 裝置紀錄：第一次連線時輸入或選擇裝置名稱；「我是既有裝置」綁定
+- G-1 使用紀錄：以登入的使用者為單位（2026-11-14 改，不再做裝置命名）
 
 ---
 
 ### 3-6　API 路由（FastAPI，2026-11-06）
 - 啟動：`uv run lct-api`（監聽 `0.0.0.0:8000`）；互動文件：`http://<主機>:8000/docs`
 - 路由都是 `async def`，同步工作以 `asyncio.to_thread()` 交給執行緒
-- 流程：上傳建立工作 → 回傳 `job_id` → 之後的請求都帶 `job_id`
+- 流程：選使用者與專案 → 上傳（`?user=&project=`）建立工作 → 回傳 `job_id` → 之後的請求都帶 `job_id`
 - 圖一律回傳 PNG；Excel 只有一份時直接下載，依儀器有兩份時打包成 zip
+- 使用者與專案名稱放在網址中，需做 URL 編碼
 
 | 區 | 方法與路徑（前綴 `/api`） | 用途 |
 | --- | --- | --- |
 | 共用 | `GET /health` | 確認 API 在線 |
-| A | `POST /jv/jobs` | 上傳 JV CSV（只接受 .csv，其他列在 `skipped`）；回傳檔案、樣品、面積檢查 |
+| G-4 | `GET /users` | 使用者清單（掃 `data/users/` 的資料夾） |
+| G-4 | `POST /users` | 新增使用者（名稱重複或含不允許的字元 400） |
+| G-4 | `GET /users/{user}/projects` | 使用者的專案（新的在前） |
+| G-4 | `POST /users/{user}/projects` | 新增專案（名稱＋條件名稱） |
+| G-4 | `GET /users/{user}/projects/{project}` | 專案內容：條件、各區目前的 `job_id` |
+| G-4 | `PUT /users/{user}/projects/{project}/conditions` | 修改條件（`old`→`new`；改名更新各區分組；已使用的不能刪） |
+| A | `POST /jv/jobs?user=&project=` | 上傳 JV CSV（只接受 .csv，其他列在 `skipped`）到專案；回傳檔案、樣品、面積檢查、專案條件 |
 | A | `GET /jv/jobs/{id}` | 工作內容（含已確認分組與缺檔清單 `missing`） |
 | A | `PUT /jv/jobs/{id}/area` | 面積確認：`null` 忽略並繼續；數值重算 J、Jsc、PCE |
 | A | `POST /jv/jobs/{id}/grouping/preview` | 平均分配／自訂／自動預填（不存檔），給拖拉畫面 |
@@ -727,14 +742,14 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | A | `POST /jv/jobs/{id}/box/table` | Box 表（方向、範圍篩選、手動保留） |
 | A | `POST /jv/jobs/{id}/box/plot` | 單一參數 Box 圖 |
 | A | `POST /jv/jobs/{id}/curves/plot` | JV 曲線疊圖 |
-| B | `POST /dark/jobs` | 上傳暗電流檔；回傳曲線、面積檢查 |
+| B | `POST /dark/jobs?user=&project=` | 上傳暗電流檔到專案；回傳曲線、面積檢查、專案條件 |
 | B | `GET /dark/jobs/{id}` | 工作內容 |
 | B | `PUT /dark/jobs/{id}/settings` | 指定面積、最低點處理（保持原始／偏移到 0 V）；已確認的分組保留 |
 | B | `POST /dark/jobs/{id}/grouping/preview` | 元件分組預填（與 A 區相同，不存檔）（2026-11-14） |
 | B | `PUT /dark/jobs/{id}/conditions` | 確認元件分組（只影響畫圖勾選排列）（2026-11-14） |
 | B | `GET /dark/jobs/{id}/excel` | 下載 Excel（依儀器） |
 | B | `POST /dark/jobs/{id}/plots/dark` | 暗電流圖 |
-| C | `POST /eqe/jobs` | 上傳 EQE 檔；回傳樣品與 Jsc |
+| C | `POST /eqe/jobs?user=&project=` | 上傳 EQE 檔到專案；回傳樣品與 Jsc |
 | C | `GET /eqe/jobs/{id}` | 工作內容 |
 | C | `PUT /eqe/jobs/{id}/names` | 改名（原名 → 新名，送完整對照） |
 | C | `GET /eqe/jobs/{id}/excel` | 下載 Excel（依儀器） |
@@ -957,6 +972,9 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | 2026-11-14 | 專案 | 一次數據處理一個專案，各區工作掛在專案下；專案統一定義條件名稱 |
 | 2026-11-14 | G-1 使用紀錄 | 改為以使用者為主（不再做裝置識別） |
 | 2026-11-14 | 報告輸出 | 獨立一區（G-5），依 Gino 的 PPT 模板，以代號替換文字、以命名方框放圖；圖片用 PNG |
+| 2026-11-14 | 專案條件 | 專案統一定義條件名稱，各區分組只能選用（API 檢查）；自動分組名稱依序取專案條件；條件改名同步各區分組，已使用的不能刪 |
+| 2026-11-14 | 開啟專案 | 直接帶出各區已有的結果（含分組與設定）；重新上傳取代該區工作，舊資料夾保留；面積已確認的不再詢問 |
+| 2026-11-14 | 舊工作資料 | `data/jobs/` 為測試資料，不搬移；資料根目錄改為 `data/`（`LCT_WORK_ROOT`） |
 | 2026-11-14 | 開發順序 | A、B 實測與 commit → 登入與專案 → C、D 頁面 → B-4 → E → 報告輸出 |
 
 ### 6-3　仍待確認

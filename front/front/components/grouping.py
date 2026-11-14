@@ -4,7 +4,7 @@ state 參數為繼承 GroupingMixin 的 State 類別；unit 為畫面上的單�
 """
 import reflex as rx
 
-from front.enums import GroupMode
+from front.enums import GroupMode, Route
 from front.states.grouping import GroupCond
 
 
@@ -69,9 +69,9 @@ def _cond_input_row(state, i: rx.Var) -> rx.Component:
     )
     return rx.hstack(
         rx.text(f"條件 {i + 1}", size="2", width="4em", flex_shrink="0"),
-        rx.input(
-            value=state.cond_names[i], on_change=lambda v: state.set_cond_name(i, v),
-            placeholder="條件名稱，例如 Ref", width="14em",
+        rx.select(
+            state.cond_choices, value=state.cond_names[i], on_change=lambda v: state.set_cond_name(i, v),
+            placeholder="選擇條件", width="14em",
         ),
         rx.cond(
             is_custom,
@@ -96,11 +96,35 @@ def _cond_input_row(state, i: rx.Var) -> rx.Component:
     )
 
 
+def _no_choices_callout() -> rx.Component:
+    """專案還沒定義條件名稱時的提示（分組只能用專案的條件）。"""
+    return rx.callout(
+        rx.hstack(
+            rx.text("這個專案還沒有定義條件名稱，分組只能使用專案統一的條件。"),
+            rx.link("前往專案頁新增條件", href=Route.PROJECTS.value),
+            spacing="2",
+            wrap="wrap",
+        ),
+        icon="triangle-alert",
+        color_scheme="amber",
+    )
+
+
 def grouping_settings(state, unit: str = "樣品") -> rx.Component:
-    """分組方式 → 條件數 → N 個輸入框 → 套用分組。"""
+    """分組方式 → 條件數 → N 個條件（從專案條件中選）→ 套用分組；專案沒有條件時只顯示提示。"""
+    return rx.cond(state.has_choices, _grouping_settings(state, unit), _no_choices_callout())
+
+
+def _grouping_settings(state, unit: str) -> rx.Component:
+    """分組設定本體。"""
     is_auto = state.group_mode == GroupMode.AUTO.value
     return _section(
         "分組設定",
+        rx.hstack(
+            rx.text("專案條件：" + state.cond_choices.join("、"), size="2", color=rx.color("gray", 11)),
+            rx.link("修改", href=Route.PROJECTS.value, size="2"),
+            spacing="2",
+        ),
         _labeled(
             "分組方式",
             rx.segmented_control.root(
@@ -112,7 +136,7 @@ def grouping_settings(state, unit: str = "樣品") -> rx.Component:
         rx.text(f"本次{unit}：" + state.samples.join("、"), size="2", color=rx.color("gray", 11)),
         rx.cond(
             is_auto,
-            rx.text(f"每 4 個{unit}一組，餘數放在最後一組；條件名稱為 Group 1、Group 2…", size="2"),
+            rx.text(f"每 4 個{unit}一組，餘數放在最後一組；條件名稱依序取專案的條件。", size="2"),
             rx.vstack(
                 _labeled(
                     "條件數",
@@ -143,9 +167,15 @@ def grouping_adjust(state, after_confirmed: rx.Component, *extra: rx.Component, 
     return _section(
         "微調與確定",
         rx.text(f"需要調整時：點選{unit}卡片（變成實心），再按條件框的「放到這裡」；按「移回這裡」放回未分配區。", size="2"),
-        rx.hstack(
-            rx.input(value=state.new_cond_name, on_change=state.set_new_cond_name, placeholder="新條件名稱"),
-            rx.button(rx.icon("plus", size=14), "新增條件", variant="soft", on_click=state.add_condition),
+        rx.cond(
+            state.unused_choices.length() > 0,
+            rx.hstack(
+                rx.select(
+                    state.unused_choices, value=state.new_cond_name, on_change=state.set_new_cond_name,
+                    placeholder="選擇要新增的條件",
+                ),
+                rx.button(rx.icon("plus", size=14), "新增條件", variant="soft", on_click=state.add_condition),
+            ),
         ),
         # 未分配區
         rx.card(
