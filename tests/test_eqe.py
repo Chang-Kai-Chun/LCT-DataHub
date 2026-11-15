@@ -44,7 +44,7 @@ from lct_datahub.core.eqe.types import (
     Spectrum,
 )
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "EQE_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "EQE_test_file"
 # 檔名可能被改過，所以用副檔名找檔：PD-QE 是 .txt，舊型是 .xls
 PDQE = next(iter(TEST_DIR.glob("*.txt")), TEST_DIR / "missing.txt")
 OLD = next(iter(TEST_DIR.glob("*.xls")), TEST_DIR / "missing.xls")

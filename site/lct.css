@@ -20,9 +20,12 @@
   --error: #B42318;       /* 只用在錯誤 */
   --plot-bg: #FFFFFF;     /* 圖一律白底（matplotlib 輸出） */
 
-  --head: 'Sora', 'Noto Sans TC', sans-serif;          /* 字標、大標 */
-  --body: 'Noto Sans TC', sans-serif;                  /* 內文 */
-  --mono: 'JetBrains Mono', 'Noto Sans TC', monospace; /* 數值、單位、樣品名 */
+  /* 中文：源流明體 GenRyuMin（SIL OFL 1.1，https://github.com/ButTaiwan/genryu-font）；
+     電腦沒裝時退回 Noto Serif TC（Google Fonts），再退回系統明體 */
+  --zh: 'GenRyuMin2 TW', 'GenRyuMin TW', 'GenRyuMin', 'Noto Serif TC', serif;
+  --head: 'Sora', 'GenRyuMin2 TW', 'GenRyuMin TW', 'GenRyuMin', 'Noto Serif TC', serif;                           /* 字標、大標（英數 Sora，中文源流明體） */
+  --body: 'GenRyuMin2 TW', 'GenRyuMin TW', 'GenRyuMin', 'Noto Serif TC', serif;                                     /* 內文 */
+  --mono: 'JetBrains Mono', 'GenRyuMin2 TW', 'GenRyuMin TW', 'GenRyuMin', 'Noto Serif TC', monospace;               /* 數值、單位、樣品名 */
 
   --ease: cubic-bezier(.2, .7, .2, 1);
   color-scheme: light;

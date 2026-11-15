@@ -11,7 +11,7 @@ from lct_datahub.core.jv.filename import (
 from lct_datahub.core.jv.types import Direction, FailureReason, JVFileError
 from lct_datahub.core.sample_id import SampleId
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "JV_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JV_test_file"
 
 
 def test_parse_basic():

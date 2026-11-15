@@ -1,115 +1,121 @@
-"""全站版面：左側導覽列（含目前使用者與專案）＋右側內容，最外層放錯誤警告視窗。"""
+"""作業區版面：左側導覽列（字標、目前專案、總覽與 a.～g.）＋右側內容，最外層放錯誤警告視窗。
+
+作業區的頁面都需要先開啟專案（專案大廳在 pages/projects.py，不使用這個版面）。
+f. 色票跟著使用者，不屬於專案，單獨一組並標示「個人」。
+樣式在 assets/lct.css（.app、.sidebar、.nav、.content、.page-head）。
+"""
 from dataclasses import dataclass
 
 import reflex as rx
 
 from front.components.error_dialog import error_dialog
+from front.components.ui import mark, wordmark
 from front.enums import Route
 from front.states.session import SessionState
 
 
 @dataclass(frozen=True)
 class NavItem:
-    """導覽列的一個項目。"""
+    """導覽列的一個項目；letter 為空字串表示平台頁（專案）。"""
 
     label: str
-    route: Route
-    icon: str
-    enabled: bool = True  # 尚未完成的功能先顯示為灰色
+    route: Route | None  # None：尚未開放
+    letter: str = ""
+    note: str = ""  # 右側小字（例如「個人」）
 
 
-NAV_ITEMS = (
-    NavItem("首頁", Route.HOME, "house"),
-    NavItem("專案", Route.PROJECTS, "folder-open"),
-    NavItem("A　JV", Route.JV, "zap"),
-    NavItem("B　暗電流", Route.DARK, "moon"),
-    NavItem("C　EQE", Route.EQE, "sun", enabled=False),
+# 四組：總覽／量測資料 a.～d.／整合與輸出 e.、g.（屬於專案）／f. 色票（屬於使用者）
+NAV_GROUPS: tuple[tuple[NavItem, ...], ...] = (
+    (NavItem("總覽", Route.OVERVIEW),),
+    (
+        NavItem("JV", Route.JV, "a."),
+        NavItem("暗電流", Route.DARK, "b."),
+        NavItem("EQE", Route.EQE, "c."),
+        NavItem("Noise", None, "d."),
+    ),
+    (
+        NavItem("PD 數據整合", None, "e."),
+        NavItem("報告輸出", None, "g."),
+    ),
+    (NavItem("色票", None, "f.", note="個人"),),
 )
 
 
-def _nav_link(item: NavItem) -> rx.Component:
-    """導覽列項目；目前頁面以底色標示。"""
-    content = rx.hstack(rx.icon(item.icon, size=18), rx.text(item.label), spacing="2", align="center")
-    if not item.enabled:
-        return rx.box(
-            rx.hstack(content, rx.badge("未開放", size="1", variant="soft"), justify="between"),
-            padding="0.5em 0.75em",
-            color=rx.color("gray", 8),
-            width="100%",
-        )
+def _nav_item(item: NavItem) -> rx.Component:
+    """導覽列項目：目前頁面左側顯示橘色小色塊；未開放的顯示灰色。"""
+    content = [rx.el.span(class_name="bar")]
+    if item.letter:
+        content.append(rx.el.span(item.letter, class_name="letter"))
+    content.append(rx.el.span(item.label))  # 包成元素，懸浮時才能跟著位移
+    if item.route is None:
+        status = f"{item.note} · 未開放" if item.note else "未開放"
+        return rx.el.li(rx.el.span(*content, rx.el.span(status, class_name="tag"), class_name="disabled"))
+    if item.note:
+        content.append(rx.el.span(item.note, class_name="tag"))
     active = rx.State.router.page.path == item.route.value
-    return rx.link(
-        rx.box(
-            content,
-            padding="0.5em 0.75em",
-            border_radius="6px",
-            background=rx.cond(active, rx.color("accent", 4), "transparent"),
-            _hover={"background": rx.color("accent", 3)},
-            width="100%",
-        ),
-        href=item.route.value,
-        underline="none",
-        color=rx.color("gray", 12),
-        width="100%",
+    return rx.el.li(
+        rx.el.a(*content, href=item.route.value, class_name=rx.cond(active, "active", "")),
     )
 
 
 def _session_box() -> rx.Component:
-    """目前的使用者與專案；可切換專案或登出。"""
-    return rx.box(
-        rx.vstack(
-            rx.hstack(rx.icon("user", size=14), rx.text(SessionState.user, size="2", weight="bold"), align="center"),
-            rx.hstack(
-                rx.icon("folder", size=14),
-                rx.text(
-                    rx.cond(SessionState.has_project, SessionState.project, "（尚未開啟專案）"),
-                    size="2", word_break="break-all",
-                ),
-                align="center",
-            ),
-            rx.hstack(
-                rx.link("切換專案", href=Route.PROJECTS.value, size="1"),
-                rx.link("登出", size="1", color_scheme="gray", on_click=SessionState.logout, cursor="pointer"),
-                spacing="3",
-            ),
-            spacing="1",
+    """目前專案（大字）與切換專案；下方小字為使用者與登出。"""
+    return rx.el.div(
+        rx.el.span("目前專案", class_name="label"),
+        rx.el.span(SessionState.project, class_name="project-name"),
+        rx.el.a("← 切換專案", href=Route.PROJECTS.value, class_name="btn switch-btn"),
+        rx.el.span(
+            rx.el.span(SessionState.user),
+            rx.el.a("登出", href="#", on_click=SessionState.logout),
+            class_name="links muted",
         ),
-        padding="0.5em 0.75em",
-        border_radius="6px",
-        background=rx.color("gray", 3),
-        width="100%",
+        class_name="session",
+    )
+
+
+def theme_toggle() -> rx.Component:
+    """深淺色切換鈕（Reflex 內建 color mode，會記住選擇）。"""
+    return rx.el.button(
+        rx.color_mode_cond(light="深色模式", dark="淺色模式"),
+        type="button", class_name="theme-toggle", on_click=rx.toggle_color_mode,
     )
 
 
 def sidebar() -> rx.Component:
     """左側導覽列。"""
-    return rx.vstack(
-        rx.heading("LCT DataHub", size="5", padding="0.5em 0.75em"),
-        rx.text("V6", size="1", color=rx.color("gray", 10), padding_left="0.75em", margin_top="-0.75em"),
-        rx.cond(SessionState.logged_in, _session_box()),
-        rx.divider(),
-        *[_nav_link(item) for item in NAV_ITEMS],
-        rx.spacer(),
-        rx.color_mode.button(),
-        width="220px",
-        min_width="220px",
-        height="100vh",
-        position="sticky",
-        top="0",
-        padding="1em 0.5em",
-        border_right=f"1px solid {rx.color('gray', 5)}",
-        background=rx.color("gray", 2),
-        spacing="1",
+    return rx.el.nav(
+        rx.el.a(mark(), wordmark(), href=Route.OVERVIEW.value, class_name="brand"),
+        _session_box(),
+        *[rx.el.ul(*[_nav_item(i) for i in group], class_name="nav") for group in NAV_GROUPS],
+        rx.el.div(class_name="spacer"),
+        rx.el.div(theme_toggle(), class_name="row"),
+        class_name="sidebar",
+        aria_label="主選單",
     )
 
 
-def layout(*children: rx.Component) -> rx.Component:
-    """頁面外框：側欄＋內容＋警告視窗。"""
-    return rx.hstack(
+def page_head(title: str, letter: str = "", meta: rx.Component | None = None) -> rx.Component:
+    """頁首：大字母（例如 b.）＋頁名；沒有字母時頁名本身放大（例如「專案」）。"""
+    if letter:
+        parts = [rx.el.span(letter, class_name="letter", aria_hidden="true"), rx.el.h1(title)]
+    else:
+        parts = [rx.el.h1(title, class_name="big-title")]
+    if meta is not None:
+        parts.append(rx.el.span(meta, class_name="meta"))
+    return rx.el.header(*parts, class_name="page-head")
+
+
+def layout(*children: rx.Component, wide: bool = False, lock=False) -> rx.Component:
+    """頁面外框：側欄＋內容＋警告視窗。
+
+    wide：內容區放寬（繪圖頁）；lock：整頁不捲動、只有內部清單捲動（可傳 Var，例如目前在繪圖分頁時）。
+    """
+    root = rx.cond(lock, "lct-root app lock-scroll", "lct-root app") if not isinstance(lock, bool) else (
+        "lct-root app lock-scroll" if lock else "lct-root app"
+    )
+    return rx.el.div(
         sidebar(),
-        rx.box(*children, padding="1.5em 2em", width="100%", min_width="0"),
+        rx.el.main(*children, class_name="content wide" if wide else "content"),
         error_dialog(),
-        spacing="0",
-        align="start",
-        width="100%",
+        class_name=root,
     )

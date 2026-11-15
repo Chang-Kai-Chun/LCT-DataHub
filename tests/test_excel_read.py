@@ -8,7 +8,7 @@ from lct_datahub.core.dark_current import integrate as dark_integrate
 from lct_datahub.core.dark_current.types import DarkColumn, DarkFailure, DarkFileError
 from lct_datahub.core.excel_read import ExcelReadError, is_excel, read_excel_grid
 
-EQE_DIR = Path(__file__).resolve().parent.parent / "EQE_test_file"
+EQE_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "EQE_test_file"
 OLD_XLS = next(iter(EQE_DIR.glob("*.xls")), EQE_DIR / "missing.xls")
 needs_xls = pytest.mark.skipif(not OLD_XLS.exists(), reason="沒有舊型 xls 測試檔")
 

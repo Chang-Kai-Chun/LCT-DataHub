@@ -76,3 +76,19 @@ def expand_samples(text: str) -> list[SampleId]:
     if not result:
         raise InvalidSampleIdError(f"沒有任何樣品：{text!r}")
     return result
+
+
+# 曲線名稱開頭的樣品代號：1–3 個字母＋數字，後面不可緊接字母或數字（B、C 區共用，2026-11-15 由 dark_current 搬來）
+# 例：G1-3 → G1、G7-1_second → G7、G1 REF-1_330 K（明志）→ G1、G10-4 → G10
+_DEVICE_PATTERN = re.compile(r"^([A-Za-z]{1,3}\d+)(?![A-Za-z0-9])")
+
+
+def device_of(name: str) -> SampleId | None:
+    """曲線（pixel）所屬的樣品：取名稱開頭的樣品代號（G1-1 → G1）；開頭不是代號時回傳 None。"""
+    match = _DEVICE_PATTERN.match(name.strip())
+    return parse_sample_id(match.group(1)) if match else None
+
+
+def devices_of(names: list[str]) -> list[SampleId]:
+    """名稱清單中出現的樣品（不重複），依字母、數字大小排序；作為分組的樣品清單。"""
+    return sorted({d for n in names if (d := device_of(n)) is not None})

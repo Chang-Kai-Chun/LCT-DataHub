@@ -6,6 +6,7 @@ Combined：每條曲線並排兩欄（V_名稱、J_名稱），長度不同的�
 偏移（B-2）過的曲線多放一欄原始電壓（Vorig_名稱），原始與偏移後都保留。
 每個樣品 sheet：Volt、I、J 三欄（偏移後多一欄原始電壓）。
 有曲線被偏移時，另有 Shift sheet 記錄每條曲線的偏移量。
+Rsh_Jd sheet：B-4 擷取值（Rsh、A·Rsh、0／−0.1／−0.5 V 的 Jd 與 Id、PD-QE 儀器對照）。
 """
 from enum import Enum
 from pathlib import Path
@@ -13,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 
 from lct_datahub.core import naming
+from lct_datahub.core.dark_current.extract import extract_all, extract_frame
 from lct_datahub.core.dark_current.types import DarkColumn, DarkCurve, Instrument
 
 
@@ -21,6 +23,7 @@ class SheetName(Enum):
 
     COMBINED = "Combined"
     SHIFT = "Shift"
+    EXTRACT = "Rsh_Jd"  # B-4 擷取值（2026-11-15）
 
 
 def combined_frame(curves: list[DarkCurve]) -> pd.DataFrame:
@@ -50,11 +53,12 @@ def shift_frame(curves: list[DarkCurve]) -> pd.DataFrame:
 
 
 def write_dark_excel(path: Path, curves: list[DarkCurve]) -> None:
-    """寫出 Excel：Combined、（有偏移才有的）Shift，之後每條曲線一個 sheet（以曲線名稱命名）。"""
+    """寫出 Excel：Combined、（有偏移才有的）Shift、Rsh_Jd（B-4 擷取值），之後每條曲線一個 sheet。"""
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         combined_frame(curves).to_excel(writer, sheet_name=SheetName.COMBINED.value, index=False)
         if any(c.is_shifted for c in curves):
             shift_frame(curves).to_excel(writer, sheet_name=SheetName.SHIFT.value, index=False)
+        extract_frame(extract_all(curves)).to_excel(writer, sheet_name=SheetName.EXTRACT.value, index=False)
         for name, c in zip(sheet_names(curves), curves):
             c.data.to_excel(writer, sheet_name=name, index=False)
 

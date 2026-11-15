@@ -1,146 +1,159 @@
-"""專案頁（G-4）：列出自己的專案、新增與開啟專案、修改目前專案的統一條件名稱。"""
+"""專案大廳（G-4）：登入後、進入作業區之前的一頁，只做「選專案」。
+
+- 不顯示 a.～g. 的側欄（還沒開專案，不能進作業區）
+- 每次都重新選專案；清單可依「最新修改」或「名稱」排序
+- f. 色票跟著使用者，不需要專案，入口放在右上角使用者旁邊
+- 開啟或新增專案後進入作業區總覽（pages/overview.py）
+"""
 import reflex as rx
 
-from front.components.layout import layout
-from front.enums import Route
-from front.states.session import ConditionRow, ProjectRow, ProjectsState
+from front.components.error_dialog import error_dialog
+from front.components.layout import theme_toggle
+from front.components.ui import BtnVariant, btn, dialog, dialog_actions, mark, text_input, wordmark
+from front.enums import ProjectSort, Route
+from front.states.session import NameSlot, ProjectRow, ProjectsState
 
 
-def _section(title: str, *children: rx.Component) -> rx.Component:
-    """有標題的區塊。"""
-    return rx.card(rx.vstack(rx.heading(title, size="3"), *children, spacing="3", width="100%"), width="100%")
-
-
-# ---------- 新增專案 ----------
-def _create_card() -> rx.Component:
-    """新增專案：名稱＋條件（一行一個，之後可修改）。"""
-    return _section(
-        "新增專案",
-        rx.hstack(
-            rx.text("專案名稱", size="2", width="6em", flex_shrink="0"),
-            rx.input(
-                value=ProjectsState.new_name, on_change=ProjectsState.set_new_name,
-                placeholder="例如 2026-11 鈍化層比較", width="24em",
+# ---------- 頂列 ----------
+def _topbar() -> rx.Component:
+    """字標；右上：f. 色票（跟著使用者，不需要專案）、使用者、深淺色、登出。"""
+    return rx.el.header(
+        rx.el.span(mark(), wordmark(), class_name="brand"),
+        rx.el.div(
+            rx.el.span(
+                rx.el.span("f.", style={"font_family": "var(--head)", "font_weight": "800"}),
+                "色票",
+                rx.el.span("未開放", class_name="small"),
+                class_name="muted", style={"display": "inline-flex", "gap": "6px", "align_items": "baseline"},
             ),
-            align="center",
+            rx.el.span(ProjectsState.user, style={"font_weight": "700"}),
+            theme_toggle(),
+            rx.el.a("登出", href="#", on_click=ProjectsState.logout),
+            class_name="who",
         ),
-        rx.hstack(
-            rx.text("條件名稱", size="2", width="6em", flex_shrink="0"),
-            rx.text_area(
-                value=ProjectsState.new_conditions, on_change=ProjectsState.set_new_conditions,
-                placeholder="一行一個，例如：\nRef\n1 mol%\n2 mol%", rows="4", width="24em",
-            ),
-            align="start",
-        ),
-        rx.text(
-            "各區分組時只能選用這些條件名稱，E 區與報告才能自動對應；之後可在下方修改。",
-            size="1", color=rx.color("gray", 10),
-        ),
-        rx.button(rx.icon("folder-plus", size=16), "建立並開啟", on_click=ProjectsState.create_project),
+        class_name="topbar",
     )
 
 
 # ---------- 專案清單 ----------
-def _project_row(row: ProjectRow) -> rx.Component:
-    """專案清單的一列；目前開啟的專案以徽章標示。"""
-    is_current = row.name == ProjectsState.project
-    return rx.table.row(
-        rx.table.cell(
-            rx.hstack(
-                rx.text(row.name, weight="bold"),
-                rx.cond(is_current, rx.badge("目前專案", color_scheme="green", size="1")),
-                spacing="2",
-                align="center",
+def _sort_control() -> rx.Component:
+    """排序：最新修改／名稱排序。"""
+    return rx.el.div(
+        *[
+            rx.el.button(
+                s.value, type="button",
+                aria_pressed=rx.cond(ProjectsState.sort == s.value, "true", "false"),
+                on_click=ProjectsState.set_sort(s.value),
             )
-        ),
-        rx.table.cell(row.conditions),
-        rx.table.cell(row.sections),
-        rx.table.cell(row.created),
-        rx.table.cell(
-            rx.button("開啟", size="1", variant=rx.cond(is_current, "soft", "solid"),
-                      on_click=ProjectsState.open_project(row.name)),
+            for s in ProjectSort
+        ],
+        class_name="segmented", role="group", aria_label="排序",
+    )
+
+
+def _project_row(row: ProjectRow) -> rx.Component:
+    """專案清單的一列；整列的「開啟」進入作業區。"""
+    return rx.el.tr(
+        rx.el.td(row.name, style={"font_weight": "700"}),
+        rx.el.td(row.conditions),
+        rx.el.td(row.sections, style={"font_family": "var(--head)", "font_weight": "800"}),
+        rx.el.td(row.updated, class_name="mono small"),
+        rx.el.td(
+            btn("開啟 →", variant=BtnVariant.PRIMARY, small=True, on_click=ProjectsState.open_project(row.name)),
+            style={"text_align": "right"},
         ),
     )
 
 
-def _list_card() -> rx.Component:
-    """我的專案（新的在前）。"""
-    return _section(
-        "我的專案",
+def _list_section() -> rx.Component:
+    """我的專案：排序、新增、清單。"""
+    return rx.el.section(
+        rx.el.div(
+            rx.el.h2("選擇專案", style={"font_family": "var(--head)", "font_weight": "600", "font_size": "24px"}),
+            _sort_control(),
+            rx.el.div(btn("＋ 新增專案", on_click=ProjectsState.open_new), class_name="end"),
+            class_name="section-head",
+        ),
         rx.cond(
             ProjectsState.rows.length() > 0,
-            rx.scroll_area(
-                rx.table.root(
-                    rx.table.header(rx.table.row(
-                        *[rx.table.column_header_cell(h) for h in ("專案", "條件", "已上傳", "建立時間", "")]
-                    )),
-                    rx.table.body(rx.foreach(ProjectsState.rows, _project_row)),
-                    size="1",
-                    width="100%",
+            rx.el.div(
+                rx.el.table(
+                    rx.el.thead(rx.el.tr(*[rx.el.th(h) for h in ("專案", "條件", "已上傳", "最後修改", "")])),
+                    rx.el.tbody(rx.foreach(ProjectsState.sorted_rows, _project_row)),
+                    class_name="table",
                 ),
-                max_height="360px",
-                type="auto",
+                class_name="table-wrap",
             ),
-            rx.text("還沒有專案，請先在上方新增。", size="2", color=rx.color("gray", 10)),
+            rx.el.p("還沒有專案，請按「新增專案」。", class_name="muted"),
         ),
+        class_name="section",
     )
 
 
-# ---------- 修改條件 ----------
-def _cond_row(row: ConditionRow, index: rx.Var) -> rx.Component:
-    """條件編輯的一列：名稱框、上下移、刪除；改過名稱或新增的列加註。"""
-    return rx.hstack(
-        rx.text(index + 1, size="2", width="1.5em"),
-        rx.input(value=row.new, on_change=lambda v: ProjectsState.set_cond_row(index, v), width="16em"),
-        rx.icon_button(rx.icon("arrow-up", size=14), size="1", variant="ghost",
-                       on_click=ProjectsState.move_cond_row(index, -1)),
-        rx.icon_button(rx.icon("arrow-down", size=14), size="1", variant="ghost",
-                       on_click=ProjectsState.move_cond_row(index, 1)),
-        rx.icon_button(rx.icon("trash-2", size=14), size="1", variant="ghost", color_scheme="red",
-                       on_click=ProjectsState.remove_cond_row(index)),
-        rx.cond(row.old == "", rx.badge("新增", color_scheme="green", size="1"),
-                rx.cond(row.old != row.new, rx.badge(f"原名 {row.old}", color_scheme="amber", size="1"))),
-        align="center",
+# ---------- 新增專案對話框：先問條件數量，再出現 N 個格子 ----------
+def _name_slot(slot: NameSlot, index: rx.Var) -> rx.Component:
+    """步驟 2 的一個條件名稱格。"""
+    return rx.el.div(
+        rx.el.label(f"條件 {slot.no}", html_for=f"cond-{index}", class_name="mono small muted",
+                    style={"width": "4.5em", "flex": "none"}),
+        text_input(slot.value, lambda v: ProjectsState.set_new_slot(index, v),
+                   class_name="grow", id=f"cond-{index}"),
+        class_name="row nowrap",
     )
 
 
-def _conditions_card() -> rx.Component:
-    """目前專案的條件名稱：改名會一併更新各區已確認的分組；已被分組使用的條件不能刪。"""
-    return _section(
-        f"目前專案的條件：{ProjectsState.project}",
-        rx.text(
-            "改名會一併更新 A、B 等各區已確認的分組；已被分組使用的條件不能刪除（請先到該區修改分組）。按「儲存條件」才會生效。",
-            size="2", color=rx.color("gray", 11),
+def _new_dialog() -> rx.Component:
+    """新增專案對話框；建立後直接進入作業區總覽。"""
+    step1 = rx.el.div(
+        rx.el.div(
+            rx.el.label("專案名稱", html_for="proj-name"),
+            text_input(ProjectsState.new_name, ProjectsState.set_new_name, id="proj-name", auto_focus=True),
+            class_name="field",
         ),
-        rx.foreach(ProjectsState.cond_rows, _cond_row),
-        rx.hstack(
-            rx.button(rx.icon("plus", size=14), "新增條件", variant="soft", on_click=ProjectsState.add_cond_row),
-            rx.button(rx.icon("save", size=14), "儲存條件", on_click=ProjectsState.save_conditions),
-            rx.button("放棄修改", variant="ghost", color_scheme="gray", on_click=ProjectsState.reset_cond_rows),
-            spacing="2",
+        rx.el.div(
+            rx.el.span("條件數量", class_name="label", id="count-label"),
+            rx.el.div(
+                rx.el.button("−", type="button", aria_label="減少", on_click=ProjectsState.dec_count),
+                rx.el.output(ProjectsState.new_count, aria_live="polite"),
+                rx.el.button("＋", type="button", aria_label="增加", on_click=ProjectsState.inc_count),
+                class_name="stepper", role="group", aria_labelledby="count-label",
+            ),
+            class_name="field",
         ),
+        dialog_actions(
+            btn("取消", variant=BtnVariant.GHOST, on_click=ProjectsState.close_new),
+            btn("下一步：輸入名稱", variant=BtnVariant.PRIMARY, on_click=ProjectsState.to_names),
+        ),
+        class_name="section", style={"gap": "20px"},
+    )
+    step2 = rx.el.div(
+        rx.el.div(rx.foreach(ProjectsState.name_slots, _name_slot), class_name="section", style={"gap": "12px"}),
+        rx.el.p("各區分組只能選用這些條件，之後可在總覽修改。", class_name="small muted", style={"margin": "0"}),
+        dialog_actions(
+            btn("← 上一步", variant=BtnVariant.GHOST, on_click=ProjectsState.to_count),
+            btn("建立並開啟", variant=BtnVariant.PRIMARY, on_click=ProjectsState.create_project),
+        ),
+        class_name="section",
+    )
+    return dialog(
+        ProjectsState.new_open, "新增專案",
+        rx.cond(ProjectsState.new_step == 1, step1, step2),
+        on_close=ProjectsState.close_new,
+        step_text=ProjectsState.new_step_text,
     )
 
 
-@rx.page(route=Route.PROJECTS.value, title="專案｜LCT DataHub", on_load=ProjectsState.load_projects)
+@rx.page(route=Route.PROJECTS.value, title="專案｜lct.", on_load=ProjectsState.load_projects)
 def projects_page() -> rx.Component:
-    """專案頁。"""
-    return layout(
-        rx.vstack(
-            rx.hstack(
-                rx.heading("專案", size="6"),
-                rx.cond(ProjectsState.loading, rx.spinner()),
-                align="center",
-            ),
-            rx.text(
-                "一次數據處理建立一個專案；A、B 等各區上傳的資料都放在目前開啟的專案中，下次開啟會帶出已有的結果。",
-                size="2", color=rx.color("gray", 11),
-            ),
-            rx.cond(ProjectsState.has_project, _conditions_card()),
-            _list_card(),
-            _create_card(),
-            spacing="3",
-            width="100%",
-            max_width="1000px",
-        )
+    """專案大廳（不顯示側欄）。"""
+    return rx.el.div(
+        rx.el.div(
+            _topbar(),
+            rx.el.header(rx.el.h1("專案", class_name="big-title"), class_name="page-head"),
+            _list_section(),
+            class_name="lobby",
+        ),
+        _new_dialog(),
+        error_dialog(),
+        class_name="lct-root",
     )

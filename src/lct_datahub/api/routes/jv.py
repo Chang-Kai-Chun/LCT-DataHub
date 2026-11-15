@@ -303,3 +303,9 @@ async def box_plot(job_id: str, body: BoxPlotIn, store: JobStore = Depends(get_s
 async def curve_plot(job_id: str, body: CurvePlotIn, store: JobStore = Depends(get_store)):
     """JV 曲線疊圖 PNG：FW 實線、RV 虛線。"""
     return await asyncio.to_thread(_curve_png, store, job_id, body)
+
+
+def job_samples(store: JobStore, job: Job) -> list[str]:
+    """工作中的樣品（給專案總覽分組；A 區樣品即檔名的樣品代號）。"""
+    _, _, files = _state(store, job)
+    return [str(s) for s in available_samples(files)]

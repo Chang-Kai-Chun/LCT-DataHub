@@ -37,7 +37,7 @@ from lct_datahub.core.dark_current.types import (
 from lct_datahub.core.jv.types import InvalidAreaError
 from lct_datahub.core.plotting import figure_to_png, plot_dark_current
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "JD_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JD_test_file"
 # 檔名可能被改過，所以用內容特徵找檔：PD-QE 是 .txt，明志是 .xls
 PDQE = next(iter(TEST_DIR.glob("JD_*.txt")), TEST_DIR / "missing.txt")
 MINGCHI = next(iter(TEST_DIR.glob("*.xls")), TEST_DIR / "missing.xls")
@@ -263,7 +263,7 @@ def test_write_dark_excel(tmp_path):
     path = tmp_path / "out.xlsx"
     write_dark_excel(path, [_curve("A"), _curve("B")])
     book = pd.read_excel(path, sheet_name=None)
-    assert list(book) == [SheetName.COMBINED.value, "A", "B"]
+    assert list(book) == [SheetName.COMBINED.value, SheetName.EXTRACT.value, "A", "B"]
     assert list(book["Combined"].columns) == ["V_A (V)", "J_A (A/cm²)", "V_B (V)", "J_B (A/cm²)"]
     assert list(book["A"].columns) == [DarkColumn.VOLTAGE.value, DarkColumn.CURRENT.value, DarkColumn.J.value]
 
@@ -276,8 +276,8 @@ def test_write_dark_excels_one_file_per_instrument(tmp_path):
     assert list(split_by_instrument([a, b, _curve("C")])) == [Instrument.PDQE, Instrument.MINGCHI]
     paths = write_dark_excels(tmp_path, [a, b, _curve("C")])
     assert [p.name for p in paths] == ["Dark_PD-QE.xlsx", "Dark_明志.xlsx"]
-    assert list(pd.read_excel(paths[0], sheet_name=None)) == ["Combined", "A", "C"]
-    assert list(pd.read_excel(paths[1], sheet_name=None)) == ["Combined", "B"]
+    assert list(pd.read_excel(paths[0], sheet_name=None)) == ["Combined", "Rsh_Jd", "A", "C"]
+    assert list(pd.read_excel(paths[1], sheet_name=None)) == ["Combined", "Rsh_Jd", "B"]
     assert len(write_dark_excels(tmp_path, [a])) == 1
 
 
@@ -333,7 +333,7 @@ def test_shifted_excel_has_both_voltages_and_shift_sheet(tmp_path):
     path = tmp_path / "s.xlsx"
     write_dark_excel(path, shift_curves([_v_curve("A", 0.03), _v_curve("B", 0.0)], ShiftMode.SHIFT))
     book = pd.read_excel(path, sheet_name=None)
-    assert list(book)[:2] == ["Combined", "Shift"]
+    assert list(book)[:3] == ["Combined", "Shift", "Rsh_Jd"]
     assert "Vorig_A (V)" in book["Combined"].columns and "V_A (V)" in book["Combined"].columns
     assert book["Shift"]["Shift (V)"].tolist() == pytest.approx([0.03, 0.0])
     assert DarkColumn.ORIGINAL_VOLTAGE.value in book["A"].columns
@@ -407,3 +407,47 @@ def test_plot_dark_current_png_and_empty():
     assert figure_to_png(plot_dark_current([_v_curve("A")])).startswith(b"\x89PNG")
     ax = plot_dark_current([]).axes[0]
     assert not ax.get_legend() and len(ax.lines) == 1  # 只剩 0 V 參考線
+
+
+# ---------- B-4 擷取值 ----------
+def test_fit_rsh_and_current_at():
+    """Rsh 為 ±0.03 V 的最小平方擬合；內插取值；超出範圍為 None。"""
+    from lct_datahub.core.dark_current.extract import current_at, fit_rsh
+
+    v = np.round(np.arange(-0.2, 0.5, 0.01), 2)
+    i = v / 2e6 + 1e-12 * v**3  # Rsh ≈ 2 MΩ
+    assert fit_rsh(v, i) == pytest.approx(2e6, rel=1e-6)
+    assert fit_rsh(np.array([0.0, 0.1]), np.array([0.0, 1.0])) is None  # 區間內只有 1 點
+    assert current_at(v, i, -0.1) == pytest.approx(-0.1 / 2e6, rel=1e-6)
+    assert current_at(v, i, -0.5) is None  # 量測從 -0.2 V 開始
+
+
+def test_extract_uses_shifted_voltage():
+    """有偏移時用偏移後的電壓：0 V 的暗電流＝|J| 最低點；Jd＝Id ÷ 面積。"""
+    from lct_datahub.core.dark_current.extract import extract
+    from lct_datahub.core.dark_current.types import ExtractBias
+
+    raw = _v_curve("A", 0.03)
+    shifted = shift_curves([raw], ShiftMode.SHIFT)[0]
+    e_raw, e_shift = extract(raw), extract(shifted)
+    assert e_raw.id[ExtractBias.ZERO] == pytest.approx(0.03 * 1e-6 * 0.045)
+    assert e_shift.id[ExtractBias.ZERO] == pytest.approx(0.0, abs=1e-15)
+    assert e_shift.jd[ExtractBias.NEG_0_1] == pytest.approx(e_shift.id[ExtractBias.NEG_0_1] / 0.045)
+    assert e_shift.rsh_area == pytest.approx(e_shift.rsh * 0.045)
+
+
+@needs_files
+def test_extract_matches_pdqe_summary():
+    """真實檔：自己算的 Rsh 與 PD-QE 彙整表一致（未偏移＝表上 Rsh；偏移後＝表上 Rs），0 V 電流＝表上 Isc。"""
+    from lct_datahub.core.dark_current.extract import extract_all
+    from lct_datahub.core.dark_current.types import ExtractBias
+
+    curves = [c for c in read_dark_files([PDQE]) if c.instrument is Instrument.PDQE]
+    assert all(c.reference is not None for c in curves)
+    for e in extract_all(curves):
+        assert e.rsh == pytest.approx(e.reference.rsh, rel=1e-3)
+        assert e.id[ExtractBias.ZERO] == pytest.approx(abs(e.reference.isc), rel=1e-3)
+    shifted = shift_curves(curves, ShiftMode.SHIFT)
+    for e in extract_all(shifted):
+        assert e.rsh == pytest.approx(e.reference.rs, rel=1e-3)
+        assert e.reference_rsh == (e.reference.rs if e.shift else e.reference.rsh)

@@ -1,50 +1,39 @@
-"""錯誤警告視窗：檔案錯誤完整顯示檔名、原因、期望、實際四項（3-5 共通）。"""
+"""錯誤警告視窗：檔案錯誤完整顯示檔名、原因、期望、實際四項（3-5 共通）。
+
+外觀使用 lct.css 的 .dialog.error（上緣為錯誤色）；不使用 Radix。
+"""
 import reflex as rx
 
+from front.components.ui import BtnVariant, btn, dialog, dialog_actions
 from front.states.error_state import ErrorState
 
 
-def _field(label: str, value: rx.Var) -> rx.Component:
+def _kv(label: str, value: rx.Var) -> list[rx.Component]:
     """一列「標題：內容」。"""
-    return rx.hstack(
-        rx.text(label, weight="bold", width="4em", flex_shrink="0"),
-        rx.text(value, white_space="pre-wrap", word_break="break-all"),
-        align="start",
-        width="100%",
-    )
+    return [rx.el.dt(label), rx.el.dd(value)]
 
 
 def error_dialog() -> rx.Component:
     """全站共用的警告視窗（放在版面最外層）。"""
-    return rx.alert_dialog.root(
-        rx.alert_dialog.content(
-            rx.alert_dialog.title(
-                rx.hstack(rx.icon("triangle-alert", color=rx.color("red", 9)), rx.text(ErrorState.error_title)),
-            ),
-            rx.alert_dialog.description(
-                rx.cond(
-                    ErrorState.error_is_file,
-                    # 檔案錯誤：四欄完整顯示
-                    rx.vstack(
-                        _field("檔名", ErrorState.error_filename),
-                        _field("原因", ErrorState.error_reason),
-                        _field("期望", ErrorState.error_expected),
-                        _field("實際", ErrorState.error_actual),
-                        rx.callout("請修正檔案後重新上傳。", icon="info", color_scheme="red", width="100%"),
-                        spacing="2",
-                        width="100%",
-                    ),
-                    rx.text(ErrorState.error_message, white_space="pre-wrap"),
+    return dialog(
+        ErrorState.error_open,
+        ErrorState.error_title,
+        rx.cond(
+            ErrorState.error_is_file,
+            # 檔案錯誤：四欄完整顯示，並提示修正後重新上傳
+            rx.el.div(
+                rx.el.dl(
+                    *_kv("檔名", ErrorState.error_filename),
+                    *_kv("原因", ErrorState.error_reason),
+                    *_kv("期望", ErrorState.error_expected),
+                    *_kv("實際", ErrorState.error_actual),
+                    class_name="kv",
                 ),
-                as_child=True,
+                rx.el.p("請修正檔案後重新上傳。", class_name="small muted", style={"margin": "12px 0 0"}),
             ),
-            rx.flex(
-                rx.alert_dialog.action(rx.button("確定", on_click=ErrorState.close_error)),
-                justify="end",
-                margin_top="1em",
-            ),
-            max_width="560px",
+            rx.el.p(ErrorState.error_message, style={"margin": "0", "white_space": "pre-wrap"}),
         ),
-        open=ErrorState.error_open,
-        on_open_change=ErrorState.set_error_open,
+        dialog_actions(btn("確定", variant=BtnVariant.PRIMARY, on_click=ErrorState.close_error, auto_focus=True)),
+        on_close=ErrorState.close_error,
+        error=True,
     )

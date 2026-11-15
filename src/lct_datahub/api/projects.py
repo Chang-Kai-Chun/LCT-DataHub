@@ -20,6 +20,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from lct_datahub.core.jv.types import GroupingError
+from lct_datahub.core.sample_id import expand_samples
 
 USERS_DIR = "users"
 PROJECTS_DIR = "projects"
@@ -66,12 +67,20 @@ def check_condition_names(names: list[str]) -> list[str]:
 
 
 # ---------- 資料模型（存在 json） ----------
+class ProjectGroup(BaseModel):
+    """總覽分組的一個條件：條件名稱＋樣品代號（正規化後，例如 G1）。"""
+
+    name: str
+    samples: list[str]
+
+
 class ProjectInfo(BaseModel):
     """project.json 的內容。"""
 
     name: str
     created: str
     conditions: list[str] = []  # 統一的條件名稱（依順序）
+    grouping: list[ProjectGroup] = []  # 總覽分組（2026-11-15）：各區可直接套用，再微調確定
     jobs: dict[str, str] = {}  # 功能（jv、dark、eqe）→ 目前的工作編號
 
 
@@ -94,6 +103,18 @@ class Project:
     def name(self) -> str:
         """專案名稱（＝資料夾名稱）。"""
         return self.info.name
+
+    def last_modified(self) -> str:
+        """最後修改時間（ISO，到秒）：project.json 與各區目前工作的 meta.json、settings.json 中最新的一個。
+
+        上傳、改設定、分組、改條件都會更新其中一個檔案，因此不另外記錄。
+        """
+        paths = [self.folder / PROJECT_FILE]
+        for section, job_id in self.info.jobs.items():
+            job_dir = self.folder / section / job_id
+            paths += [job_dir / "meta.json", job_dir / SETTINGS_FILE]
+        latest = max(p.stat().st_mtime for p in paths if p.is_file())
+        return datetime.fromtimestamp(latest).isoformat(timespec="seconds")
 
 
 class Workspace:
@@ -199,12 +220,42 @@ class Workspace:
             settings_files = self._settings_files(project)
             if removed:
                 used = self._sections_using(settings_files, set(removed))
+                for group in project.info.grouping:  # 總覽分組也算使用中
+                    if group.name in removed:
+                        used.setdefault(group.name, []).append("總覽")
                 if used:
                     detail = "；".join(f"{c}（{'、'.join(s)}）" for c, s in used.items())
-                    raise GroupingError(f"以下條件已用在分組中，請先到該區修改分組再刪除：{detail}")
+                    raise GroupingError(f"以下條件已用在分組中，請先修改該處的分組再刪除：{detail}")
             for path in settings_files:
                 _rename_in_settings(path, renames)
-            info = project.info.model_copy(update={"conditions": new_names})
+            grouping = [ProjectGroup(name=renames.get(g.name, g.name), samples=g.samples) for g in project.info.grouping]
+            info = project.info.model_copy(update={"conditions": new_names, "grouping": grouping})
+            _write_json(project.folder / PROJECT_FILE, info.model_dump())
+        return Project(project.user, project.folder, info)
+
+    def set_grouping(self, user: str, name: str, entries: list[tuple[str, str]]) -> Project:
+        """設定總覽分組：entries 為 (條件名稱, 樣品範圍字串，例如 'G1-G4, G7')；樣品空白的條件略過。
+
+        條件須在專案條件中、不可重複；同一樣品不可屬於兩個條件；樣品代號格式錯誤拋出 InvalidSampleIdError。
+        """
+        project = self.get_project(user, name)
+        allowed = project.info.conditions
+        groups: list[ProjectGroup] = []
+        owner: dict[str, str] = {}  # 樣品 → 已屬於的條件
+        for cond, text in entries:
+            if cond not in allowed:
+                raise GroupingError(f"條件「{cond}」不在專案的條件清單中（{'、'.join(allowed)}）")
+            if any(g.name == cond for g in groups):
+                raise GroupingError(f"條件「{cond}」重複")
+            samples = [str(s) for s in expand_samples(text)] if text.strip() else []  # 空白＝這個條件沒有樣品
+            for s in samples:
+                if s in owner:
+                    raise GroupingError(f"{s} 同時屬於「{owner[s]}」與「{cond}」")
+                owner[s] = cond
+            if samples:
+                groups.append(ProjectGroup(name=cond, samples=samples))
+        with self._lock:
+            info = self._load(project.user, project.folder).info.model_copy(update={"grouping": groups})
             _write_json(project.folder / PROJECT_FILE, info.model_dump())
         return Project(project.user, project.folder, info)
 

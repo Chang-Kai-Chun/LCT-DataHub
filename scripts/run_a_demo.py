@@ -10,7 +10,7 @@ from lct_datahub.core.jv.types import Direction, DirectionMode, JVParam
 from lct_datahub.core.plotting import figure_to_png, plot_box, plot_jv_curves
 
 ROOT = Path(__file__).resolve().parent.parent
-RAW = ROOT / "JV_test_file"  # 原始資料
+RAW = ROOT / "test_for_develop" / "JV_test_file"  # 原始資料
 OUT = ROOT / "Result" / "A"  # 輸出資料夾
 OUT.mkdir(parents=True, exist_ok=True)
 

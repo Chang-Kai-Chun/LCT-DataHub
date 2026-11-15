@@ -8,7 +8,7 @@ from lct_datahub.core.eqe.types import EqeInstrument
 from lct_datahub.core.plotting import figure_to_png, plot_eqe, plot_rplot
 
 ROOT = Path(__file__).resolve().parent.parent
-RAW = ROOT / "EQE_test_file"  # 原始資料
+RAW = ROOT / "test_for_develop" / "EQE_test_file"  # 原始資料
 OUT = ROOT / "Result" / "C"  # 輸出資料夾
 OUT.mkdir(parents=True, exist_ok=True)
 

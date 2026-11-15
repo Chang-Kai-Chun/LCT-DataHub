@@ -7,7 +7,7 @@ import pytest
 from lct_datahub.core.jv.reader import list_jv_csv, read_jv_csv, read_jv_files
 from lct_datahub.core.jv.types import CurveColumn, FailureReason, JVFileError, JVParam
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "JV_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JV_test_file"
 SAMPLE = TEST_DIR / "I10 FW 236.csv"
 
 pytestmark = pytest.mark.skipif(not TEST_DIR.exists(), reason="沒有 JV_test_file")

@@ -1,4 +1,4 @@
-"""B 區共用的 Enum、dataclass 與例外（B-1、B-2、B-3 共用）。"""
+"""B 區共用的 Enum、dataclass 與例外（B-1、B-2、B-3、B-4 共用）。"""
 from dataclasses import dataclass
 from enum import Enum
 
@@ -26,6 +26,27 @@ class ShiftMode(Enum):
 
     SHIFT = "偏移到 0 V"  # 整條曲線的電壓平移，使 |J| 最低點落在 0 V（圖右上角註記 shift）
     KEEP = "保持原始"
+
+
+class ExtractBias(Enum):
+    """B-4 暗電流取值電壓（V）：預設 0 V，可選 −0.1 V、−0.5 V（[[暗電流解析]] 的建議）；有偏移時為偏移後的電壓。"""
+
+    ZERO = 0.0
+    NEG_0_1 = -0.1
+    NEG_0_5 = -0.5
+
+
+@dataclass(frozen=True)
+class InstrumentRef:
+    """PD-QE 檔底部彙整表的對照值（B-4 只當對照與測試，2026-11-15 驗證過算法）。
+
+    - rsh：原始電壓 −0.03～0.03 V 的 I-V 最小平方擬合（＝未偏移時自己算的 Rsh）
+    - rs：Voc（|J| 最低點）附近 ±0.03 V 的同樣擬合（＝偏移後自己算的 Rsh）
+    """
+
+    isc: float  # 原始 0 V 的電流（A；表上為 mA）
+    rs: float  # Ω
+    rsh: float  # Ω
 
 
 class DarkFailure(Enum):
@@ -61,6 +82,7 @@ class DarkCurve:
     removed_points: int  # 智慧截取掉的點數
     data: pd.DataFrame  # 欄位為 DarkColumn 的 value；偏移後多一欄 ORIGINAL_VOLTAGE
     shift: float = 0.0  # 偏移量 V：Volt = 原始電壓 − shift（沒偏移為 0）
+    reference: InstrumentRef | None = None  # PD-QE 彙整表的對照值（明志沒有）
 
     @property
     def is_shifted(self) -> bool:

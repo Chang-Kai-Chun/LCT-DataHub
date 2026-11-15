@@ -2,7 +2,8 @@
 import reflex as rx
 
 from front.components.grouping import grouping_adjust, grouping_settings
-from front.components.layout import layout
+from front.components.layout import layout, page_head
+from front.components.ui import busy, upload_box
 from front.enums import BOX_FILTER_PARAMS, Direction, DirectionMode, JVParam, JVTab, Route
 from front.states.jv_state import UPLOAD_ID, BoxRow, FileRow, JVState
 
@@ -87,43 +88,12 @@ def _upload_tab() -> rx.Component:
     return rx.vstack(
         _section(
             "上傳 JV CSV",
-            rx.upload(
-                rx.vstack(
-                    rx.icon("upload", size=28, color=rx.color("gray", 10)),
-                    rx.text("拖曳檔案到這裡，或點選選擇檔案", size="2"),
-                    rx.text(
-                        "只接受 .csv，檔名格式如 G1 FW 432.csv 或 G1FW432.csv（空格可有可無）",
-                        size="1", color=rx.color("gray", 10),
-                    ),
-                    align="center",
-                    spacing="1",
-                    width="100%",
-                ),
-                id=UPLOAD_ID,
-                multiple=True,
-                accept={"text/csv": [".csv"]},
-                border=f"2px dashed {rx.color('gray', 7)}",
-                border_radius="8px",
-                padding="1.5em",
-                width="100%",
-                cursor="pointer",
-            ),
-            rx.flex(
-                rx.foreach(rx.selected_files(UPLOAD_ID), lambda name: rx.badge(name, variant="soft")),
-                wrap="wrap",
-                gap="1",
-            ),
-            rx.hstack(
-                rx.button(
-                    rx.icon("file-up", size=16), "上傳並讀取",
-                    on_click=JVState.handle_upload(rx.upload_files(upload_id=UPLOAD_ID)),
-                    loading=JVState.loading,
-                ),
-                rx.button("清除選擇", variant="soft", color_scheme="gray", on_click=rx.clear_selected_files(UPLOAD_ID)),
-            ),
-            rx.text(
-                "上傳到目前專案；重新上傳會取代這個專案的 A 區資料（分組與設定清除，舊資料夾保留在主機上）。",
-                size="1", color=rx.color("gray", 10),
+            upload_box(
+                UPLOAD_ID,
+                {"text/csv": [".csv"]},
+                "只接受 .csv，檔名格式如 G1 FW 432.csv 或 G1FW432.csv（空格可有可無）",
+                JVState.handle_upload(rx.upload_files(upload_id=UPLOAD_ID)),
+                JVState.loading,
             ),
         ),
         rx.cond(JVState.has_job, _result_card()),
@@ -520,11 +490,8 @@ def jv_page() -> rx.Component:
     """JV 頁面。"""
     return layout(
         rx.vstack(
-            rx.hstack(
-                rx.heading("A　JV", size="6"),
-                rx.cond(JVState.loading, rx.spinner()),
-                align="center",
-            ),
+            page_head("JV", letter="a."),
+            busy(JVState.loading),
             rx.tabs.root(
                 rx.tabs.list(*[rx.tabs.trigger(label, value=tab.value) for tab, label, _ in TABS]),
                 *[rx.tabs.content(build(), value=tab.value, padding_top="1em") for tab, _, build in TABS],

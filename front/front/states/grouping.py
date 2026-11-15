@@ -14,6 +14,8 @@ from front import api_client as api
 from front.api_client import ApiError
 from front.enums import GroupMode
 
+ADJUST_ID = "group-adjust"  # 「微調與確定」區塊的 id（套用分組後捲到這裡）
+NEXT_ID = "group-next"  # 「確定分組」那一列的 id（確認後捲到這裡）
 DEFAULT_COND_COUNT = 2  # 分組預設條件數
 MAX_COND_COUNT = 12  # 條件數選單的上限（另受樣品數限制）
 SAMPLE_PATTERN = re.compile(r"^([A-Z]{1,3})(\d+)$")  # API 回傳的樣品代號已正規化（大寫、無前導零）
@@ -86,6 +88,7 @@ class GroupingMixin(rx.State, mixin=True):
     unassigned: list[str] = []
     selected_sample: str = ""
     groups_confirmed: bool = False
+    group_busy: bool = False  # 等待 API（套用、確定）時為 True，按鈕旁顯示八面體動畫
 
     # ---------- 子類別需提供 ----------
     def _job_path(self) -> str:
@@ -104,6 +107,18 @@ class GroupingMixin(rx.State, mixin=True):
 
     def _on_groups_confirmed(self) -> None:
         """分組確認後，子類別可做額外處理。"""
+
+    def _preview_path(self) -> str:
+        """預填分組的 API 路徑（總覽分組可覆寫）。"""
+        return f"{self._job_path()}/grouping/preview"
+
+    def _confirm_path(self) -> str:
+        """確定分組的 API 路徑（PUT；總覽分組可覆寫）。"""
+        return f"{self._job_path()}/conditions"
+
+    def _preview_extra(self) -> dict:
+        """預填分組時額外送出的內容（總覽分組要送樣品清單）。"""
+        return {}
 
     # ---------- 狀態更新（給子類別的 _apply_job 呼叫） ----------
     def _load_choices(self, choices: list[str]) -> None:
@@ -281,15 +296,43 @@ class GroupingMixin(rx.State, mixin=True):
         except ValueError as exc:
             self._show_message(str(exc))
             return
+        self.group_busy = True
+        yield
         try:
-            data = await api.post_json(f"{self._job_path()}/grouping/preview", body)
+            data = await api.post_json(self._preview_path(), {**body, **self._preview_extra()})
         except ApiError as err:
             self._handle_error(err)
             return
+        finally:
+            self.group_busy = False
         self.conditions = [GroupCond(c["name"], list(c["samples"])) for c in data["conditions"]]
         self.unassigned = list(data["unassigned"])
         self.selected_sample = ""
         self._unconfirm()
+        yield rx.scroll_to(ADJUST_ID)  # 捲到「微調與確定」，提示下一步
+
+    @rx.event
+    def apply_project_grouping(self):
+        """套用總覽的分組：取專案分組中本區有的樣品；本區多出來的樣品放在未分配，之後可微調再確定。
+
+        project_grouping 來自 SessionState（各區 State 都是它的子狀態）。
+        """
+        present = set(self.samples)
+        conds = [
+            GroupCond(g.name, self._sorted([s for s in g.samples if s in present]))
+            for g in self.project_grouping
+            if g.name in self.cond_choices
+        ]
+        conds = [c for c in conds if c.samples]
+        if not conds:
+            self._show_message("總覽的分組中，沒有本區的樣品")
+            return
+        assigned = {s for c in conds for s in c.samples}
+        self.conditions = conds
+        self.unassigned = [s for s in self.samples if s not in assigned]
+        self.selected_sample = ""
+        self._unconfirm()
+        return rx.scroll_to(ADJUST_ID)
 
     # ---------- 微調 ----------
     @rx.event
@@ -359,10 +402,15 @@ class GroupingMixin(rx.State, mixin=True):
             self._show_message("尚未分配的樣品：" + "、".join(self.unassigned))
             return
         body = {"conditions": [{"name": c.name, "samples": c.samples} for c in self.conditions]}
+        self.group_busy = True
+        yield
         try:
-            data = await api.put_json(f"{self._job_path()}/conditions", body)
+            data = await api.put_json(self._confirm_path(), body)
         except ApiError as err:
             self._handle_error(err)
             return
+        finally:
+            self.group_busy = False
         self._apply_job(data)
         self._on_groups_confirmed()
+        yield rx.scroll_to(NEXT_ID)  # 捲到「已確認／下一步」

@@ -1,561 +1,416 @@
-"""B 區暗電流頁面：五個分頁依序操作（上傳與面積 → 最低點偏移 → Excel → 分組 → 暗電流圖）。"""
+"""B 區暗電流頁面（lct. 設計）：b-1 整合 → b-2 分組 → b-3 暗電流圖（b-4 擷取值規劃中）。
+
+- b-1 整合：上傳、有效面積確認、最低點偏移、下載 Excel
+- b-2 分組：依專案條件分組（只影響暗電流圖勾選清單的排列，可略過）
+- b-3 暗電流圖：左邊勾選清單（只有它捲動），右邊圖與參數固定
+"""
 import reflex as rx
 
 from front.components.grouping import grouping_adjust, grouping_settings
-from front.components.layout import layout
+from front.components.layout import layout, page_head
+from front.components.picker import curve_picker, plot_figure, plot_layout
+from front.components.ui import (
+    BtnVariant, btn, busy, copy_cell, dialog, dialog_actions, note, panel, segmented, step_tabs, tag, text_input,
+    upload_box,
+)
 from front.enums import DarkTab, Route, ShiftMode
-from front.states.dark_state import ACCEPT, PLOT_NAME, UPLOAD_ID, DarkCurveRow, DarkState, DeviceColumn, PlotBlock
+from front.states.dark_state import ACCEPT, PLOT_NAME, UPLOAD_ID, DarkCurveRow, DarkState, ExtractRow
+
+# 步驟標籤：(value, 代號, 名稱, 是否可點)
+TABS = [
+    (DarkTab.INTEGRATE.value, "b-1", "整合", True),
+    (DarkTab.GROUPING.value, "b-2", "分組", True),
+    (DarkTab.PLOT.value, "b-3", "暗電流圖", True),
+    (DarkTab.EXTRACT.value, "b-4", "擷取值", True),
+]
 
 
 # ---------- 共用小元件 ----------
-def _section(title: str, *children: rx.Component) -> rx.Component:
-    """有標題的區塊。"""
-    return rx.card(rx.vstack(rx.heading(title, size="3"), *children, spacing="3", width="100%"), width="100%")
-
-
 def _need_ready() -> rx.Component:
     """尚未上傳或面積未確認時的提示。"""
-    return rx.callout("請先在「上傳與面積」完成上傳並確認面積。", icon="info")
+    return note("請先在「b-1 整合」完成上傳並確認有效面積。")
 
 
-def _next_button(label: str, tab: DarkTab) -> rx.Component:
-    """「下一步」按鈕：切到下一個分頁。"""
-    return rx.button(label, rx.icon("arrow-right", size=18), size="3", on_click=DarkState.go_to(tab.value))
+def _next(label: str, tab: DarkTab) -> rx.Component:
+    """「下一步」按鈕。"""
+    return btn(label, " →", variant=BtnVariant.PRIMARY, on_click=DarkState.go_to(tab.value))
 
 
-def _table(headers: list[str], body: rx.Component, max_height: str = "320px") -> rx.Component:
+def _table(headers: list[str], rows: rx.Component) -> rx.Component:
     """可捲動的小表格。"""
-    return rx.scroll_area(
-        rx.table.root(
-            rx.table.header(rx.table.row(*[rx.table.column_header_cell(h) for h in headers])),
-            rx.table.body(body),
-            size="1",
+    return rx.el.div(
+        rx.el.table(
+            rx.el.thead(rx.el.tr(*[rx.el.th(h) for h in headers])),
+            rx.el.tbody(rows),
+            class_name="table compact",
         ),
-        max_height=max_height,
-        type="auto",
+        class_name="table-scroll",
     )
 
 
-# ---------- 1. 上傳與面積 ----------
+# ---------- b-1 整合 ----------
 def _curve_row(c: DarkCurveRow) -> rx.Component:
-    """曲線表的一列；面積為反推時加註。"""
-    return rx.table.row(
-        rx.table.cell(c.name),
-        rx.table.cell(rx.badge(c.instrument, variant="soft")),
-        rx.table.cell(c.source),
-        rx.table.cell(
-            rx.hstack(
-                rx.text(c.area),
-                rx.cond(~c.area_from_file, rx.badge("非檔內", color_scheme="amber", size="1")),
-                spacing="1",
-                align="center",
-            )
-        ),
-        rx.table.cell(c.points),
-        rx.table.cell(rx.cond(c.removed_points > 0, c.removed_points.to_string(), "—")),
-        rx.table.cell(c.timestamp),
+    """曲線表的一列；面積是反推的加註。"""
+    return rx.el.tr(
+        rx.el.td(c.name, class_name="mono"),
+        rx.el.td(c.instrument),
+        rx.el.td(c.source, class_name="small"),
+        rx.el.td(c.area, rx.cond(~c.area_from_file, rx.el.span(" 非檔內", class_name="small muted")), class_name="num"),
+        rx.el.td(c.points, class_name="num"),
+        rx.el.td(rx.cond(c.removed_points > 0, c.removed_points.to_string(), "—"), class_name="num"),
+        rx.el.td(c.timestamp, class_name="small"),
     )
 
 
 def _area_status() -> rx.Component:
-    """有效面積狀態徽章與「設定面積」按鈕。"""
-    return rx.hstack(
-        rx.text("有效面積：", weight="bold", size="2"),
+    """有效面積狀態與「設定面積」按鈕。"""
+    return rx.el.div(
+        rx.el.span("有效面積", class_name="label"),
         rx.cond(
             DarkState.area_override != "",
-            rx.badge(f"已改為 {DarkState.area_override} cm²（J 已重算）", color_scheme="amber"),
+            tag(f"已改為 {DarkState.area_override} cm²（J 已重算）", "warn"),
             rx.cond(
                 DarkState.area_confirmed,
                 rx.cond(
                     DarkState.area_uniform,
-                    rx.badge(f"{DarkState.area_uniform_value} cm²（全部一致）", color_scheme="green"),
-                    rx.badge("各檔不同，已選擇沿用檔內面積", color_scheme="amber"),
+                    tag(f"{DarkState.area_uniform_value} cm²（全部一致）", "ok"),
+                    tag("各檔不同，已選擇沿用檔內面積", "warn"),
                 ),
-                rx.badge("尚未確認", color_scheme="red"),
+                tag("尚未確認", "warn"),
             ),
         ),
-        rx.button("設定面積", size="1", variant="soft", on_click=DarkState.open_area_dialog),
-        align="center",
+        btn("設定面積", small=True, on_click=DarkState.open_area_dialog),
+        class_name="row",
     )
 
 
-def _result_card() -> rx.Component:
-    """讀取結果（加粗框線與大標題），並提供「下一步：最低點偏移」。"""
-    ok = DarkState.area_confirmed
-    return rx.card(
-        rx.vstack(
-            rx.hstack(
-                rx.cond(
-                    ok,
-                    rx.icon("circle-check", size=32, color=rx.color("green", 9)),
-                    rx.icon("circle-alert", size=32, color=rx.color("amber", 9)),
-                ),
-                rx.vstack(
-                    rx.heading(rx.cond(ok, "讀取完成", "讀取完成，請確認有效面積"), size="6"),
-                    rx.text(f"{DarkState.curves.length()} 條曲線", size="3"),
-                    spacing="0",
-                ),
-                rx.spacer(),
-                rx.cond(
-                    ok,
-                    _next_button("下一步：最低點偏移", DarkTab.SHIFT),
-                    rx.button("確認有效面積", size="3", color_scheme="amber", on_click=DarkState.open_area_dialog),
-                ),
-                align="center",
-                width="100%",
-            ),
-            rx.divider(),
-            rx.text(f"工作編號 {DarkState.job_id}", size="1", color=rx.color("gray", 10)),
+def _result() -> rx.Component:
+    """讀取結果：數量、略過的檔案、面積狀態、曲線表。"""
+    return panel(
+        "讀取結果",
+        rx.el.div(
+            rx.el.strong(rx.cond(DarkState.area_confirmed, "讀取完成", "讀取完成，請確認有效面積")),
+            rx.el.span(DarkState.pick_sample_count, " 個樣品 · ", DarkState.pick_pixel_count, " 個 pixel",
+                       class_name="mono small muted"),
             rx.cond(
-                DarkState.skipped.length() > 0,
-                rx.callout(
-                    "以下檔案已略過（副檔名不支援，或 Excel 檔名沒有 _abs）：" + DarkState.skipped.join("、"),
-                    icon="info", color_scheme="amber",
-                ),
+                ~DarkState.area_confirmed,
+                btn("確認有效面積", variant=BtnVariant.WARN, small=True, on_click=DarkState.open_area_dialog),
             ),
-            _area_status(),
-            _table(["名稱", "儀器", "來源檔", "面積 (cm²)", "點數", "截取點數", "測量時間"], rx.foreach(DarkState.curves, _curve_row)),
-            spacing="3",
-            width="100%",
+            class_name="row",
         ),
-        width="100%",
-        border=rx.cond(ok, f"2px solid {rx.color('green', 8)}", f"2px solid {rx.color('amber', 8)}"),
-        background=rx.cond(ok, rx.color("green", 2), rx.color("amber", 2)),
+        rx.cond(
+            DarkState.skipped.length() > 0,
+            note("以下檔案已略過（副檔名不支援，或 Excel 檔名沒有 _abs）：", DarkState.skipped.join("、"), kind="warn"),
+        ),
+        _area_status(),
+        _table(["名稱", "儀器", "來源檔", "面積 (cm²)", "點數", "截取點數", "測量時間"],
+               rx.foreach(DarkState.curves, _curve_row)),
     )
 
 
-def _upload_tab() -> rx.Component:
-    """上傳暗電流檔（PD-QE TXT、明志 txt／csv／dat／xlsx／xls）。"""
-    return rx.vstack(
-        _section(
-            "上傳暗電流檔",
-            rx.upload(
-                rx.vstack(
-                    rx.icon("upload", size=28, color=rx.color("gray", 10)),
-                    rx.text("拖曳檔案到這裡，或點選選擇檔案", size="2"),
-                    rx.text(
-                        "接受 .txt、.csv、.dat、.xlsx、.xls（Excel 檔名須含 _abs）；儀器（PD-QE／明志）依內容自動判斷",
-                        size="1", color=rx.color("gray", 10),
-                    ),
-                    align="center",
-                    spacing="1",
-                    width="100%",
-                ),
-                id=UPLOAD_ID,
-                multiple=True,
-                accept=ACCEPT,
-                border=f"2px dashed {rx.color('gray', 7)}",
-                border_radius="8px",
-                padding="1.5em",
-                width="100%",
-                cursor="pointer",
-            ),
-            rx.flex(
-                rx.foreach(rx.selected_files(UPLOAD_ID), lambda name: rx.badge(name, variant="soft")),
-                wrap="wrap",
-                gap="1",
-            ),
-            rx.hstack(
-                rx.button(
-                    rx.icon("file-up", size=16), "上傳並讀取",
-                    on_click=DarkState.handle_upload(rx.upload_files(upload_id=UPLOAD_ID)),
-                    loading=DarkState.loading,
-                ),
-                rx.button("清除選擇", variant="soft", color_scheme="gray", on_click=rx.clear_selected_files(UPLOAD_ID)),
-            ),
-            rx.text(
-                "上傳到目前專案；重新上傳會取代這個專案的 B 區資料（設定與分組清除，舊資料夾保留在主機上）。",
-                size="1", color=rx.color("gray", 10),
-            ),
-        ),
-        rx.cond(DarkState.has_job, _result_card()),
-        spacing="3",
-        width="100%",
+def _shift_row(c: DarkCurveRow) -> rx.Component:
+    """偏移表的一列：被偏移的曲線以橘色標示（需要使用者留意）。"""
+    return rx.el.tr(
+        rx.el.td(c.name, class_name="mono"),
+        rx.el.td(c.instrument),
+        rx.el.td(c.shift, class_name="num", style={"font_weight": rx.cond(c.is_shifted, "700", "400")}),
+        rx.el.td(rx.cond(c.is_shifted, tag("已偏移", "warn"), rx.el.span("—", class_name="muted"))),
     )
 
 
+def _shift() -> rx.Component:
+    """最低點位置二選一；偏移時列出各曲線的偏移量。"""
+    return panel(
+        "最低點位置",
+        segmented([m.value for m in ShiftMode], DarkState.shift_mode, DarkState.set_shift_mode, label="最低點位置"),
+        rx.cond(
+            DarkState.is_shift_mode,
+            rx.el.p("整條曲線找 |J| 最低點，只平移電壓軸（V' = V − V_min），I、J 不動、不內插；原始電壓保留在 Excel。"
+                    "圖的右上角會註記 shift。", class_name="small muted", style={"margin": "0"}),
+            rx.el.p("保持儀器量到的原始電壓，不做任何平移。", class_name="small muted", style={"margin": "0"}),
+        ),
+        rx.cond(
+            DarkState.is_shift_mode,
+            rx.fragment(
+                rx.el.span(DarkState.shifted_count, " ／ ", DarkState.curves.length(), " 個 pixel 被偏移（偏移量 0 的不算）",
+                           class_name="mono small"),
+                _table(["名稱", "儀器", "偏移量 (V)", "狀態"], rx.foreach(DarkState.curves, _shift_row)),
+            ),
+        ),
+    )
+
+
+def _excel() -> rx.Component:
+    """下載整合 Excel（依儀器各一份，兩份時為 zip），以及下一步。"""
+    return panel(
+        "下載 Excel",
+        rx.el.p("依儀器各輸出一份（Dark_PD-QE.xlsx、Dark_明志.xlsx），各含 Combined 加每條曲線一個 sheet；"
+                "兩種儀器都有時打包成 Dark.zip。偏移時另含原始電壓與 Shift sheet。",
+                class_name="small muted", style={"margin": "0"}),
+        rx.el.div(
+            btn("下載 Excel", on_click=DarkState.download_excel, disabled=DarkState.loading),
+            _next("下一步：分組", DarkTab.GROUPING),
+            class_name="row",
+        ),
+    )
+
+
+def _integrate_tab() -> rx.Component:
+    """b-1 整合：上傳 → 讀取結果 → 最低點位置 → Excel。"""
+    return rx.el.div(
+        panel(
+            "上傳",
+            upload_box(
+                UPLOAD_ID, ACCEPT,
+                "接受 .txt、.csv、.dat、.xlsx、.xls（Excel 檔名須含 _abs）；儀器（PD-QE／明志）依內容自動判斷",
+                DarkState.handle_upload(rx.upload_files(upload_id=UPLOAD_ID)),
+                DarkState.loading,
+            ),
+        ),
+        rx.cond(DarkState.has_job, _result()),
+        rx.cond(DarkState.ready, rx.fragment(_shift(), _excel())),
+        class_name="section", style={"gap": "40px"},
+    )
+
+
+# ---------- 面積對話框 ----------
 def _area_row(row) -> rx.Component:
     """面積表的一列。"""
-    return rx.table.row(rx.table.cell(row.filename), rx.table.cell(row.areas))
+    return rx.el.tr(rx.el.td(row.filename, class_name="small"), rx.el.td(row.areas, class_name="num"))
 
 
 def _area_dialog() -> rx.Component:
-    """有效面積確認視窗：忽略並繼續，或改為指定面積（先顯示數據將被更動的警告）。"""
-    return rx.dialog.root(
-        rx.dialog.content(
-            rx.dialog.title(rx.cond(DarkState.area_uniform, "確認有效面積", "有效面積不一致")),
-            rx.vstack(
-                rx.cond(
-                    DarkState.area_uniform,
-                    rx.text(f"所有檔案的面積都是 {DarkState.area_uniform_value} cm²。", size="2"),
-                    rx.text("檔案中出現的面積值：" + DarkState.area_values.join("、") + " cm²", size="2"),
-                ),
-                # 明志檔內沒有面積：提示使用者這是反推值
-                rx.cond(
-                    DarkState.derived_sources.length() > 0,
-                    rx.callout(
-                        rx.vstack(
-                            rx.text("以下檔案（明志）沒有記錄面積，表中的面積是由 |I| ÷ J 反推的，請確認是否正確："),
-                            rx.text(DarkState.derived_sources.join("、"), weight="bold"),
-                            spacing="1",
-                        ),
-                        icon="triangle-alert",
-                        color_scheme="amber",
-                    ),
-                ),
-                _table(["檔名", "面積 (cm²)"], rx.foreach(DarkState.area_rows, _area_row), max_height="240px"),
-                rx.divider(),
-                rx.button("忽略並繼續（沿用目前面積）", variant="soft", on_click=DarkState.area_ignore, width="100%"),
-                rx.hstack(
-                    rx.text("改為", size="2"),
-                    rx.input(value=DarkState.area_input, on_change=DarkState.set_area_input, placeholder="例如 0.045", width="8em"),
-                    rx.text("cm²（套用到本次所有曲線）", size="2"),
-                    rx.button("套用", on_click=DarkState.area_request_override),
-                    align="center",
-                ),
-                spacing="3",
-                width="100%",
-            ),
-            rx.flex(rx.dialog.close(rx.button("稍後再說", variant="ghost", color_scheme="gray")), justify="end", margin_top="1em"),
-            max_width="640px",
+    """有效面積確認：忽略並繼續，或改為指定面積（先顯示數據將被更動的警告）。"""
+    return dialog(
+        DarkState.area_dialog_open,
+        rx.cond(DarkState.area_uniform, "確認有效面積", "有效面積不一致"),
+        rx.cond(
+            DarkState.area_uniform,
+            rx.el.p("所有檔案的面積都是 ", DarkState.area_uniform_value, " cm²。", style={"margin": "0"}),
+            rx.el.p("檔案中出現的面積值：", DarkState.area_values.join("、"), " cm²", style={"margin": "0"}),
         ),
-        open=DarkState.area_dialog_open,
-        on_open_change=DarkState.set_area_dialog_open,
+        rx.cond(
+            DarkState.derived_sources.length() > 0,
+            note(
+                rx.el.span("以下檔案（明志）沒有記錄面積，表中的面積是由 |I| ÷ J 反推的，請確認是否正確："),
+                rx.el.strong(DarkState.derived_sources.join("、")),
+                kind="warn",
+            ),
+        ),
+        _table(["檔名", "面積 (cm²)"], rx.foreach(DarkState.area_rows, _area_row)),
+        btn("忽略並繼續（沿用目前面積）", on_click=DarkState.area_ignore),
+        rx.el.div(
+            rx.el.span("改為", class_name="small"),
+            text_input(DarkState.area_input, DarkState.set_area_input, class_name="mono", style={"width": "8em"},
+                       aria_label="指定面積"),
+            rx.el.span("cm²（套用到本次所有曲線）", class_name="small"),
+            btn("套用", variant=BtnVariant.PRIMARY, small=True, on_click=DarkState.area_request_override),
+            class_name="row",
+        ),
+        dialog_actions(btn("稍後再說", variant=BtnVariant.GHOST, on_click=DarkState.set_area_dialog_open(False))),
+        on_close=DarkState.set_area_dialog_open(False),
     )
 
 
 def _area_notice_dialog() -> rx.Component:
-    """改面積前的警告：數據將被更動（AREA_OVERRIDE_NOTICE）。"""
-    return rx.alert_dialog.root(
-        rx.alert_dialog.content(
-            rx.alert_dialog.title("數據將被更動"),
-            rx.alert_dialog.description(
-                rx.vstack(
-                    rx.text(DarkState.area_notice, white_space="pre-wrap"),
-                    rx.text(f"新面積：{DarkState.area_input} cm²", weight="bold"),
-                    spacing="2",
-                ),
-                as_child=True,
-            ),
-            rx.flex(
-                rx.alert_dialog.cancel(rx.button("取消", variant="soft", color_scheme="gray", on_click=DarkState.area_cancel_notice)),
-                rx.alert_dialog.action(rx.button("確認更動", color_scheme="red", on_click=DarkState.area_confirm_override)),
-                spacing="3",
-                justify="end",
-                margin_top="1em",
-            ),
+    """改面積前的警告：數據將被更動。"""
+    return dialog(
+        DarkState.area_notice_open,
+        "數據將被更動",
+        rx.el.p(DarkState.area_notice, style={"margin": "0", "white_space": "pre-wrap"}),
+        rx.el.strong("新面積：", DarkState.area_input, " cm²"),
+        dialog_actions(
+            btn("取消", variant=BtnVariant.GHOST, on_click=DarkState.area_cancel_notice),
+            btn("確認更動", variant=BtnVariant.PRIMARY, on_click=DarkState.area_confirm_override),
         ),
-        open=DarkState.area_notice_open,
+        on_close=DarkState.area_cancel_notice,
     )
 
 
-# ---------- 2. 最低點偏移 ----------
-def _shift_row(c: DarkCurveRow) -> rx.Component:
-    """偏移表的一列：被偏移的曲線以粗體標示。"""
-    return rx.table.row(
-        rx.table.cell(c.name),
-        rx.table.cell(c.instrument),
-        rx.table.cell(rx.text(c.shift, weight=rx.cond(c.is_shifted, "bold", "regular"))),
-        rx.table.cell(rx.cond(c.is_shifted, rx.badge("已偏移", color_scheme="red", size="1"), rx.text("—"))),
-    )
-
-
-def _shift_tab() -> rx.Component:
-    """B-2：最低點位置二選一，偏移時顯示各曲線的偏移量。"""
-    return rx.cond(
-        DarkState.ready,
-        _section(
-            "最低點位置處理",
-            rx.segmented_control.root(
-                *[rx.segmented_control.item(m.value, value=m.value) for m in ShiftMode],
-                value=DarkState.shift_mode,
-                on_change=DarkState.set_shift_mode,
-            ),
-            rx.cond(
-                DarkState.is_shift_mode,
-                rx.text(
-                    "整條曲線找 |J| 最低點，只平移電壓軸（V' = V − V_min），I、J 不動、不內插；"
-                    "原始電壓保留在 Excel。圖的右上角會註記 shift。",
-                    size="2",
-                ),
-                rx.text("保持儀器量到的原始電壓，不做任何平移。", size="2"),
-            ),
-            rx.cond(
-                DarkState.is_shift_mode,
-                rx.vstack(
-                    rx.text(
-                        f"{DarkState.shifted_count} ／ {DarkState.curves.length()} 條曲線被偏移（偏移量 0 的不算）",
-                        size="2", weight="bold",
-                    ),
-                    _table(["名稱", "儀器", "偏移量 (V)", "狀態"], rx.foreach(DarkState.curves, _shift_row), max_height="360px"),
-                    spacing="2",
-                    width="100%",
-                ),
-            ),
-            rx.hstack(rx.spacer(), _next_button("下一步：下載 Excel", DarkTab.EXCEL), width="100%"),
-        ),
-        _need_ready(),
-    )
-
-
-# ---------- 3. Excel ----------
-def _excel_tab() -> rx.Component:
-    """下載整合 Excel：依儀器各一份（兩份時打包為 zip）。"""
-    return rx.cond(
-        DarkState.ready,
-        _section(
-            "下載整合 Excel",
-            rx.text(
-                "依儀器各輸出一份（Dark_PD-QE.xlsx、Dark_明志.xlsx），各含 Combined 加每條曲線一個 sheet；"
-                "兩種儀器都有時打包成 Dark.zip。",
-                size="2",
-            ),
-            rx.hstack(
-                rx.text("目前設定：", size="2"),
-                rx.badge(DarkState.shift_mode, variant="soft"),
-                rx.cond(
-                    DarkState.area_override != "",
-                    rx.badge(f"面積 {DarkState.area_override} cm²", color_scheme="amber", variant="soft"),
-                ),
-                rx.cond(
-                    DarkState.is_shift_mode,
-                    rx.text("（Excel 會同時放原始與偏移後電壓，並加 Shift sheet）", size="1", color=rx.color("gray", 10)),
-                ),
-                align="center",
-                spacing="2",
-            ),
-            rx.hstack(
-                rx.button(
-                    rx.icon("download", size=16), "下載 Excel", size="3",
-                    on_click=DarkState.download_excel, loading=DarkState.loading,
-                ),
-                _next_button("下一步：分組", DarkTab.GROUPING),
-                spacing="3",
-            ),
-        ),
-        _need_ready(),
-    )
-
-
-# ---------- 4. 分組（畫面元件與 A 區共用：components/grouping.py） ----------
+# ---------- b-2 分組 ----------
 def _grouping_tab() -> rx.Component:
-    """依元件分組（G1-1、G1-2 → G1）；只影響暗電流圖勾選清單的排列，可略過。"""
-    unit = "元件"
+    """依樣品分組（G1-1、G1-2 → G1）；只影響暗電流圖勾選清單的排列，不影響 Excel，可略過。"""
+    unit = "樣品"
     return rx.cond(
         DarkState.ready,
         rx.cond(
             DarkState.samples.length() > 0,
-            rx.vstack(
-                rx.callout(
-                    "分組只用來排列「暗電流圖」的勾選清單（同一條件的元件放在一起），不影響 Excel；可以略過。",
-                    icon="info",
-                ),
+            rx.el.div(
+                note("分組只用來排列「b-3 暗電流圖」的勾選清單（同一條件的樣品放在一起），不影響 Excel；可以略過。"),
                 grouping_settings(DarkState, unit=unit),
                 rx.cond(
                     DarkState.conditions.length() > 0,
-                    grouping_adjust(DarkState, _next_button("下一步：暗電流圖", DarkTab.PLOT), unit=unit),
+                    grouping_adjust(DarkState, _next("下一步：暗電流圖", DarkTab.PLOT), unit=unit),
                 ),
-                rx.hstack(
-                    rx.spacer(),
-                    rx.button(
-                        "略過分組，直接畫圖", rx.icon("arrow-right", size=16), variant="soft",
-                        on_click=DarkState.open_skip_dialog,
-                    ),
-                    width="100%",
-                ),
-                spacing="3",
-                width="100%",
+                rx.el.div(btn("略過分組，直接畫圖 →", on_click=DarkState.open_skip_dialog), class_name="row"),
+                class_name="section", style={"gap": "32px"},
             ),
-            rx.callout("曲線名稱都無法辨識元件（需以 G1、I10 這類代號開頭），無法分組。", icon="info", color_scheme="amber"),
+            note("曲線名稱都無法辨識樣品（需以 G1、I10 這類代號開頭），無法分組。", kind="warn"),
         ),
         _need_ready(),
     )
 
 
 def _skip_dialog() -> rx.Component:
-    """「略過分組」的二次確認視窗。"""
-    return rx.alert_dialog.root(
-        rx.alert_dialog.content(
-            rx.alert_dialog.title("確定略過分組？"),
-            rx.alert_dialog.description(
-                rx.cond(
-                    DarkState.groups_confirmed,
-                    "已確認的分組會保留，暗電流圖的勾選清單仍依分組排列。之後可隨時回來修改分組。",
-                    "暗電流圖的勾選清單會把全部元件排在同一個區塊。之後可隨時回來分組。",
-                ),
+    """「略過分組」的二次確認。"""
+    return dialog(
+        DarkState.skip_dialog_open,
+        "確定略過分組？",
+        rx.el.p(
+            rx.cond(
+                DarkState.groups_confirmed,
+                "已確認的分組會保留，暗電流圖的勾選清單仍依分組排列。之後可隨時回來修改分組。",
+                "暗電流圖的勾選清單會把全部樣品排在同一個區塊。之後可隨時回來分組。",
             ),
-            rx.flex(
-                rx.alert_dialog.cancel(rx.button("返回分組", variant="soft", color_scheme="gray", on_click=DarkState.cancel_skip)),
-                rx.alert_dialog.action(rx.button("確定略過", on_click=DarkState.confirm_skip)),
-                spacing="3",
-                justify="end",
-                margin_top="1em",
-            ),
+            style={"margin": "0"},
         ),
-        open=DarkState.skip_dialog_open,
-    )
-
-
-# ---------- 5. 暗電流圖 ----------
-def _curve_check(name: rx.Var) -> rx.Component:
-    """一條曲線的勾選框。"""
-    return rx.checkbox(
-        name, size="1", checked=DarkState.plot_selected.contains(name),
-        on_change=lambda v: DarkState.toggle_plot_curve(name, v),
-    )
-
-
-def _device_column(col: DeviceColumn) -> rx.Component:
-    """一個元件一直行：上方元件名稱（點選整行勾選／取消），下方是它的曲線。"""
-    return rx.vstack(
-        rx.button(col.device, size="1", variant="soft", width="100%", on_click=DarkState.toggle_plot_many(col.curves)),
-        rx.foreach(col.curves, _curve_check),
-        spacing="1",
-        min_width="7.5em",
-        padding_right="0.5em",
-        border_right=f"1px solid {rx.color('gray', 4)}",
-    )
-
-
-def _plot_block(block: PlotBlock) -> rx.Component:
-    """一個條件（或全部元件）的區塊：標題列＋元件直行（橫向排列，放不下時換列）。
-
-    「暫時隱藏」：勾選保留，但這一區的曲線不畫進圖；區塊變淡並加上「已隱藏」標記。
-    """
-    hidden = DarkState.hidden_blocks.contains(block.title)
-    return rx.box(
-        rx.hstack(
-            rx.text(block.title, weight="bold", size="2"),
-            rx.badge(f"{block.columns.length()} 個元件、{block.curves.length()} 條", variant="soft", size="1"),
-            rx.button("整組勾選／取消", size="1", variant="ghost", on_click=DarkState.toggle_plot_many(block.curves)),
-            rx.spacer(),
-            rx.cond(hidden, rx.badge("已隱藏（不畫進圖）", color_scheme="amber", size="1")),
-            rx.button(
-                rx.cond(hidden, rx.icon("eye", size=14), rx.icon("eye-off", size=14)),
-                rx.cond(hidden, "取消隱藏", "暫時隱藏"),
-                size="1",
-                variant=rx.cond(hidden, "solid", "soft"),
-                color_scheme=rx.cond(hidden, "amber", "gray"),
-                on_click=DarkState.toggle_hide_block(block.title),
-            ),
-            align="center",
-            width="100%",
-            margin_bottom="0.5em",
+        dialog_actions(
+            btn("返回分組", variant=BtnVariant.GHOST, on_click=DarkState.cancel_skip),
+            btn("確定略過", variant=BtnVariant.PRIMARY, on_click=DarkState.confirm_skip),
         ),
-        rx.flex(
-            rx.foreach(block.columns, _device_column),
-            wrap="wrap", gap="3", align="start",
-            opacity=rx.cond(hidden, "0.4", "1"),
-        ),
-        padding="0.75em",
-        border=rx.cond(hidden, f"1px dashed {rx.color('amber', 7)}", f"1px solid {rx.color('gray', 5)}"),
-        border_radius="8px",
-        width="100%",
+        on_close=DarkState.cancel_skip,
     )
 
 
+# ---------- b-3 暗電流圖 ----------
+def _range(label: str, unit: str, lo, hi, on_lo, on_hi, key: str, hint: str = "") -> rx.Component:
+    """一組「下限～上限」輸入框（留空為自動）；key 隨「範圍改回自動」改變，讓輸入框清空。"""
+    return rx.el.div(
+        rx.el.span(label, " ", rx.el.span(unit, class_name="mono", style={"font_weight": "400"}),
+                   class_name="label", style={"color": "var(--ink)", "font_weight": "700"}),
+        rx.el.div(
+            text_input(lo, on_lo, placeholder="自動", class_name="mono", aria_label=f"{label}下限",
+                       key=f"{key}-lo-{DarkState.range_key}"),
+            rx.el.span("～", class_name="muted"),
+            text_input(hi, on_hi, placeholder="自動", class_name="mono", aria_label=f"{label}上限",
+                       key=f"{key}-hi-{DarkState.range_key}"),
+            class_name="range",
+        ),
+        rx.el.span(hint, class_name="small muted") if hint else rx.fragment(),
+        class_name="field",
+    )
 
-def _range_input(label: str, lo: rx.Var, hi: rx.Var, on_lo, on_hi, hint: str) -> rx.Component:
-    """一組「下限～上限」輸入框（留空為自動）。"""
-    return rx.hstack(
-        rx.text(label, size="2", width="8em"),
-        rx.input(value=lo, on_change=on_lo, placeholder="自動", width="7em"),
-        rx.text("～"),
-        rx.input(value=hi, on_change=on_hi, placeholder="自動", width="7em"),
-        rx.text(hint, size="1", color=rx.color("gray", 10)),
-        align="center",
+
+def _plot_params() -> rx.Component:
+    """圖下方的參數：X、Y 範圍與按鈕。"""
+    return rx.el.div(
+        _range("X 軸", "(V)", DarkState.x_min, DarkState.x_max, DarkState.set_x_min, DarkState.set_x_max, "x"),
+        _range("Y 軸 |J|", "(A/cm²)", DarkState.y_min, DarkState.y_max, DarkState.set_y_min, DarkState.set_y_max,
+               "y", hint="對數座標，下限須大於 0，例如 1e-10"),
+        rx.el.div(
+            btn("預覽", variant=BtnVariant.PRIMARY, class_name="grow", on_click=DarkState.plot_dark,
+                disabled=DarkState.loading),
+            btn("下載 PNG", disabled=DarkState.plot_png == "",
+                on_click=rx.download(url=DarkState.plot_png, filename=PLOT_NAME)),
+            btn("範圍改回自動", variant=BtnVariant.GHOST, on_click=DarkState.reset_plot_range),
+            class_name="row nowrap full",
+        ),
+        class_name="params params-grid",
     )
 
 
 def _plot_tab() -> rx.Component:
-    """B-3：勾選曲線、X／Y 範圍 → |J| 對數疊圖。"""
+    """b-3：左邊勾選清單、右邊圖與參數。"""
+    goto_grouping = rx.cond(
+        ~DarkState.groups_confirmed,
+        btn("前往分組", variant=BtnVariant.GHOST, small=True, on_click=DarkState.go_to(DarkTab.GROUPING.value)),
+    )
     return rx.cond(
         DarkState.ready,
-        _section(
-            "暗電流疊圖",
-            rx.hstack(
-                rx.button("全選", size="1", variant="soft", on_click=DarkState.select_all_plot),
-                rx.button("全消", size="1", variant="soft", color_scheme="gray", on_click=DarkState.select_no_plot),
-                rx.text(f"已選 {DarkState.plot_selected.length()} 條", size="2", color=rx.color("gray", 11)),
-                rx.cond(
-                    DarkState.hidden_selected_count > 0,
-                    rx.text(f"（其中 {DarkState.hidden_selected_count} 條暫時隱藏）", size="2", color=rx.color("amber", 11)),
+        plot_layout(
+            curve_picker(DarkState, goto_grouping),
+            plot_figure(DarkState.plot_png, "暗電流疊圖", DarkState.loading),
+            _plot_params(),
+        ),
+        _need_ready(),
+    )
+
+
+# ---------- b-4 擷取值 ----------
+def _extract_row(r: ExtractRow) -> rx.Component:
+    """擷取值的一列；數值點一下就複製。"""
+    return rx.el.tr(
+        copy_cell(r.name, class_name="mono"),
+        rx.el.td(rx.cond(r.shifted, tag(r.shift, "warn"), rx.el.span("—", class_name="muted")), class_name="num"),
+        copy_cell(r.rsh, style={"font_weight": "700"}),
+        rx.cond(
+            r.reference_rsh != "",
+            copy_cell(r.reference_rsh, class_name="num muted"),
+            rx.el.td(rx.el.span("—", class_name="muted"), class_name="num"),
+        ),
+        copy_cell(r.rsh_area),
+        copy_cell(r.jd_0),
+        copy_cell(r.jd_01),
+        copy_cell(r.jd_05),
+    )
+
+
+def _extract_tab() -> rx.Component:
+    """b-4：每條曲線的 Rsh 與 0／−0.1／−0.5 V 的暗電流（E 區使用哪個電壓由 E 區選擇）。"""
+    return rx.cond(
+        DarkState.ready,
+        rx.el.div(
+            panel(
+                "擷取值",
+                rx.el.p(
+                    "Rsh 取 −0.03～0.03 V 的 I-V 最小平方擬合（與 PD-QE 軟體相同）。曲線有偏移時一律用偏移後的電壓"
+                    "（0 V＝|J| 最低點）。PD-QE 另列儀器值對照（未偏移＝表上 Rsh、偏移後＝表上 Rs）；明志沒有儀器值。"
+                    "點一下數值即可複製。",
+                    class_name="small muted", style={"margin": "0"},
                 ),
-                rx.spacer(),
-                rx.text("點元件名稱可整行勾選／取消", size="1", color=rx.color("gray", 10)),
-                rx.cond(
-                    ~DarkState.groups_confirmed,
-                    rx.button(
-                        "前往分組", size="1", variant="ghost",
-                        on_click=DarkState.go_to(DarkTab.GROUPING.value),
+                rx.el.div(
+                    rx.el.table(
+                        rx.el.thead(rx.el.tr(
+                            *[rx.el.th(h) for h in ("名稱", "偏移量 (V)", "Rsh (Ω)", "儀器 Rsh (Ω)", "A·Rsh (Ω·cm²)",
+                                                     "Jd 0 V", "Jd −0.1 V", "Jd −0.5 V")],
+                        )),
+                        rx.el.tbody(rx.foreach(DarkState.extract_rows, _extract_row)),
+                        class_name="table compact",
                     ),
+                    class_name="table-scroll", style={"max_height": "60vh"},
                 ),
-                align="center",
-                width="100%",
+                rx.el.p("Jd 單位 A/cm²；Excel 的 Rsh_Jd sheet 另含 Id (A)。量測範圍不含該電壓時顯示 —。",
+                        class_name="small muted", style={"margin": "0"}),
+                end=[btn("下載 Excel", small=True, on_click=DarkState.download_excel, disabled=DarkState.loading)],
             ),
-            rx.scroll_area(
-                rx.vstack(rx.foreach(DarkState.plot_blocks, _plot_block), spacing="2", width="100%"),
-                max_height="420px",
-                type="auto",
-            ),
-            _range_input("X 軸 (V)", DarkState.x_min, DarkState.x_max, DarkState.set_x_min, DarkState.set_x_max, ""),
-            _range_input(
-                "Y 軸 |J| (A/cm²)", DarkState.y_min, DarkState.y_max, DarkState.set_y_min, DarkState.set_y_max,
-                "對數座標，下限須大於 0，例如 1e-10",
-            ),
-            rx.hstack(
-                rx.button(rx.icon("chart-line", size=16), "預覽", on_click=DarkState.plot_dark, loading=DarkState.loading),
-                rx.button("範圍改回自動", variant="ghost", on_click=DarkState.reset_plot_range),
-                rx.cond(
-                    DarkState.plot_png != "",
-                    rx.button(
-                        rx.icon("download", size=16), "下載 PNG", variant="soft",
-                        on_click=rx.download(url=DarkState.plot_png, filename=PLOT_NAME),
-                    ),
-                ),
-                align="center",
-            ),
-            rx.cond(DarkState.plot_png != "", rx.image(src=DarkState.plot_png, max_width="720px", width="100%")),
+            class_name="section",
         ),
         _need_ready(),
     )
 
 
 # ---------- 頁面 ----------
-TABS = (
-    (DarkTab.UPLOAD, "1 上傳與面積", _upload_tab),
-    (DarkTab.SHIFT, "2 最低點偏移", _shift_tab),
-    (DarkTab.EXCEL, "3 Excel", _excel_tab),
-    (DarkTab.GROUPING, "4 分組", _grouping_tab),
-    (DarkTab.PLOT, "5 暗電流圖", _plot_tab),
-)
+def _tab_content() -> rx.Component:
+    """依目前的步驟顯示內容。"""
+    return rx.match(
+        DarkState.tab,
+        (DarkTab.GROUPING.value, _grouping_tab()),
+        (DarkTab.PLOT.value, _plot_tab()),
+        (DarkTab.EXTRACT.value, _extract_tab()),
+        _integrate_tab(),
+    )
 
 
 @rx.page(
-    route=Route.DARK.value, title="B 暗電流｜LCT DataHub",
+    route=Route.DARK.value, title="b. 暗電流｜lct.",
     on_load=[DarkState.require_project, DarkState.sync_project],
 )
 def dark_page() -> rx.Component:
     """暗電流頁面。"""
     return layout(
-        rx.vstack(
-            rx.hstack(
-                rx.heading("B　暗電流", size="6"),
-                rx.cond(DarkState.loading, rx.spinner()),
-                align="center",
+        page_head(
+            "暗電流", letter="b.",
+            meta=rx.cond(
+                DarkState.has_job,
+                rx.el.span(DarkState.pick_sample_count, " 個樣品 · ", DarkState.pick_pixel_count, " 個 pixel"),
             ),
-            rx.tabs.root(
-                rx.tabs.list(*[rx.tabs.trigger(label, value=tab.value) for tab, label, _ in TABS]),
-                *[rx.tabs.content(build(), value=tab.value, padding_top="1em") for tab, _, build in TABS],
-                value=DarkState.tab,
-                on_change=DarkState.set_tab,
-                width="100%",
-            ),
-            _area_dialog(),
-            _area_notice_dialog(),
-            _skip_dialog(),
-            spacing="3",
-            width="100%",
-            max_width="1100px",
-        )
+        ),
+        step_tabs(DarkState.tab, TABS, DarkState.set_tab),
+        rx.el.div(_tab_content(), class_name="tab-panel plot-host"),
+        _area_dialog(),
+        _area_notice_dialog(),
+        _skip_dialog(),
+        busy(DarkState.loading),
+        wide=True,
+        lock=DarkState.plot_locked,
     )

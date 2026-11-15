@@ -4,9 +4,12 @@
   - 'Name' 列：每個樣品一組 5 欄，樣品名寫在該組第 1 欄（電壓欄）
   - 'Time Stamp'、'Area (mm^2)' 等參數列，值同樣寫在該組第 1 欄
   - '[Result]' 列為各欄表頭：Volt. (V)、I (A)、I (A)_Semi-Log、J (A/mm^2)、Dark (A)
-  - '[Raw Data]' 列起為數據，遇到空白列結束；其後的 '==========' 與彙整表忽略
+  - '[Raw Data]' 列起為數據，遇到空白列結束
+  - 其後 '==========' 下方為彙整表（每個 pixel 一列：Name、Isc (mA)、…、Rs (ohm)、Rsh (ohm)…）；
+    讀成 InstrumentRef 附在曲線上，只給 B-4 當對照（2026-11-15）
 電流密度單位 A/mm^2，整合時轉成 A/cm^2（×100）並取絕對值。
 """
+import math
 import numpy as np
 import pandas as pd
 
@@ -17,9 +20,11 @@ from lct_datahub.core.dark_current.types import (
     DarkFailure,
     DarkFileError,
     Instrument,
+    InstrumentRef,
 )
 
 _MM2_TO_CM2 = 0.01  # 1 mm^2 = 0.01 cm^2
+_MA_TO_A = 1e-3
 _GROUP_WIDTH = 5  # 每個樣品 5 欄
 _MIN_POINTS = 3
 
@@ -35,6 +40,10 @@ class _Label:
     VOLTAGE = "Volt. (V)"
     CURRENT = "I (A)"
     J = "J (A/mm^2)"
+    # 底部彙整表的欄位
+    SUM_ISC = "Isc (mA)"
+    SUM_RS = "Rs (ohm)"
+    SUM_RSH = "Rsh (ohm)"
 
 
 def is_pdqe_text(rows: list[list[str]]) -> bool:
@@ -64,6 +73,30 @@ def _to_float(text: str) -> float:
         return float("nan")
 
 
+def parse_summary(rows: list[list[str]]) -> dict[str, InstrumentRef]:
+    """讀底部彙整表：pixel 名稱 → InstrumentRef（Isc 換成 A）；沒有彙整表或欄位不齊回傳空 dict。"""
+    start = next(
+        (i for i, r in enumerate(rows) if len(r) > 1 and r[0].strip() == _Label.NAME and r[1].strip() == _Label.SUM_ISC),
+        None,
+    )
+    if start is None:
+        return {}
+    header = [h.strip() for h in rows[start]]
+    try:
+        i_isc, i_rs, i_rsh = header.index(_Label.SUM_ISC), header.index(_Label.SUM_RS), header.index(_Label.SUM_RSH)
+    except ValueError:
+        return {}
+    refs: dict[str, InstrumentRef] = {}
+    for row in rows[start + 1:]:
+        name = _cell(row, 0)
+        if not name:
+            break
+        values = (_to_float(_cell(row, i_isc)), _to_float(_cell(row, i_rs)), _to_float(_cell(row, i_rsh)))
+        if all(math.isfinite(v) for v in values):
+            refs[name] = InstrumentRef(isc=values[0] * _MA_TO_A, rs=values[1], rsh=values[2])
+    return refs
+
+
 def parse_pdqe(rows: list[list[str]], filename: str) -> list[DarkCurve]:
     """解析 PD-QE 的 tab 分隔列，回傳檔內全部曲線（名稱可能與其他檔重複，由整合步驟處理）。"""
     name_row = _find_row(rows, _Label.NAME)
@@ -87,6 +120,7 @@ def parse_pdqe(rows: list[list[str]], filename: str) -> list[DarkCurve]:
             data_end = i
             break
     body = rows[raw_row:data_end]
+    refs = parse_summary(rows[data_end:])  # 底部彙整表（對照用）
 
     curves = []
     for j in volt_cols:
@@ -131,6 +165,7 @@ def parse_pdqe(rows: list[list[str]], filename: str) -> list[DarkCurve]:
                 timestamp=_cell(rows[time_row], j) or None if time_row is not None else None,
                 removed_points=int(valid.sum()) - keep,
                 data=data,
+                reference=refs.get(name),
             )
         )
     return curves

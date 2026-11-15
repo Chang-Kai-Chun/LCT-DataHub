@@ -36,15 +36,15 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 | 區 | 核心（`core/`） | 說明 |
 | --- | --- | --- |
 | **A　JV** | **暫時完成**（98 個 pytest 通過） | A-1 整合、A-2 Box 圖、A-3 JV 曲線的核心與繪圖都已完成；API 已完成，Reflex 頁面製作中（見 3-5） |
-| B　暗電流 | **B-1、B-2、B-3 核心已完成**（133 個 pytest 通過） | 整合、最低點偏移、暗電流圖都已完成；API 與 Reflex 頁面已完成；B-4（Rsh、Jd 擷取值）已規劃，排在 E 區之前 |
+| B　暗電流 | **B-1～B-4 全部完成**（2026-11-15） | 整合、最低點偏移、暗電流圖、擷取值（Rsh、Jd）的核心、API、Reflex 頁面都已完成 |
 | C　EQE | **C-1、C-2、C-3 核心已完成**（166 個 pytest 通過） | 整合（兩種儀器）、EQE 加積分電流圖、R-plot 都已完成；API 已完成，Reflex 頁面未開始（需補分組） |
 | D　Noise | 未開始 | 只有 `types.py` |
 | E　衍生指標 | 暫緩（D\* 流程已規劃，見 3-3 E） | |
 | 登入、專案、報告輸出 | 已規劃（G-4、G-5，2026-11-14） | 排在 A、B 實測與 commit 之後 |
 | F　色票 | 未開始 | 繪圖暫用 `plotting.py` 內建色盤 |
 | G　平台功能 | **G-2 工作資料夾**（`api/jobs.py`）、**G-4 登入與專案**（`api/projects.py`，2026-11-14）已完成；G-1、G-3、G-5 未開始 | G-4 前端待 Gino 瀏覽器實測 |
-| **API（FastAPI）** | **A、B、C 與使用者／專案路由已完成**（212 個 pytest 通過，2026-11-14） | 29 個路由（G-4 新增 6 個），見 3-6；`uv run lct-api` 啟動 |
-| **前端（Reflex）** | **A、B 頁面已完成並實測**（2026-11-14，commit `1ea2aaf`）；**登入與專案頁已完成，待實測** | `front/` 為獨立 uv 環境；分組狀態與畫面 A、B 共用；C 區未開始 |
+| **API（FastAPI）** | **A、B、C 與使用者／專案路由已完成**（219 個 pytest 通過，2026-11-15） | 36 個路由（G-4 新增 9 個、C 區分組 2 個、B-4 2 個），見 3-6；`uv run lct-api` 啟動 |
+| **前端（Reflex）** | **lct. 設計改版**（2026-11-15）：登入、專案大廳、總覽、**B 區（改版完成）**、**C 區（新做，待實測）**；A 區只有上傳區與分組換新，其餘待改 | `front/` 為獨立 uv 環境；分組（GroupingMixin）、勾選清單（CurvePickerMixin）A、B、C 共用；樣式 `front/assets/lct.css`，原型在 `site/` |
 
 **A 區已完成的內容**
 - **A-1 JV 整合**：檔名解析與失敗檢查、CSV 讀取（依表頭辨識欄位）、有效面積檢查與改用指定面積重算、樣品分組（平均／自訂／自動／手動）、整合與 Excel 輸出（ALL_Data、五張參數 sheet、每檔 sheet）
@@ -404,12 +404,28 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 - X、Y 範圍由前端傳入（預設自動）；Y 軸為對數，下限須大於 0
 - 有曲線被偏移才在右上角加 *shift*（紅框、黑字、斜體、粗體）
 
-**B-4　擷取值：Rsh 與指定偏壓的 Jd　`新`　（2026-11-14 規劃，排在 E 區之前）**
-- 目的：B 區先算好每條曲線的 $R_{sh}$ 與 $J_d$，E 區算 D\* 時直接取用，不需要使用者自己找值
-- [[暗電流解析]] 建議取 **−0.1 V 或 −0.5 V** 的暗電流（0 V 會高估）
-- $R_{sh}$：由 I-V 在 0 V 附近的斜率求得（見 [[暗電流解析]]）
-- 輸出：每條曲線一列（$R_{sh}$、−0.1 V 的 $J_d$、−0.5 V 的 $J_d$），同時寫進 Excel 與 API
-- 待確認（見 6-3）：擬合範圍（±0.01 V 或 ±0.05 V，固定或可選）、曲線偏移後用偏移後還是原始電壓、$R_{sh}$ 存 Ω 或 Ω·cm²
+**B-4　擷取值：Rsh 與指定偏壓的 Jd　`新`　（2026-11-14 規劃；2026-11-15 完成：核心 `extract.py`、API、b-4 分頁、Excel `Rsh_Jd` sheet）**
+- 實作：`core/dark_current/extract.py`（`fit_rsh`、`current_at`、`extract`、`extract_frame`）；PD-QE 彙整表由 `pdqe.parse_summary` 讀成 `InstrumentRef` 附在曲線上（`DarkCurve.reference`）
+- 暗電流電壓的選擇存在 B 區設定 `extract_bias`（API `PUT extract-bias`），**選擇按鈕放在 E 區**，b-4 只顯示三個電壓的數值（2026-11-15）
+- b-4 表格的數值**點一下即複製**（`ui.copy_cell`，跳出「已複製」提示）
+- 測試：57 個 pixel 自己算的 Rsh＝表上 Rsh（未偏移）／Rs（偏移後）、0 V 電流＝表上 Isc，相對誤差 < 0.1%
+- 目的：B 區先算好每條曲線的 $R_{sh}$ 與 $J_d$，E 區算 D\* 與 D-2 參考線直接取用，不需要使用者自己找值
+- **定案（2026-11-15）**：
+  - **暗電流取值電壓**：**預設 0 V**，使用者可改選 **−0.1 V 或 −0.5 V**（[[暗電流解析]] 的建議）
+  - **$R_{sh}$**：I-V 在 **−0.03 V 到 0.03 V** 的斜率（與 PD-QE 軟體相同），$R_{sh} = \Delta V / \Delta I$，單位 **Ω**；Thermal 用 $A \cdot R_{sh}$（面積換成 cm²）
+  - **曲線有偏移（B-2）時，一律用偏移後的電壓**（0 V 即 |J| 最低點）
+  - **一律從曲線自己算**（PD-QE 與明志相同做法）：暗電流用指定電壓的內插值，$R_{sh}$ 用上述範圍的斜率
+- **PD-QE 檔底部的彙整表**（2026-11-15 以 `JD_test_file` 確認）：每個 pixel 一列，欄位 `Name、Isc (mA)、P (uW)、Voc (V)、Pmax (mW)、Imax (mA)、Vmax (V)、Efficiency (%)、Fill Factor (%)、Jsc (mA/cm^2)、Jmax (mA/cm^2)、Area (mm^2)、Rs (ohm)、Rsh (ohm)、Pmax-t (Celsius)`
+  - `Isc` 為原始 0 V 的電流、`Jsc` 為原始 0 V 的電流密度（G1-3：1.292×10⁻⁹ A ÷ 0.045 cm² = 2.87×10⁻⁸ A/cm²，與 Jsc 一致）；`Voc` 很小但不為 0，即最低點偏移
+  - **已驗證儀器的算法（2026-11-15，57 個 pixel 全部比對）**：
+    - `Rsh (ohm)`＝**原始電壓** −0.03～0.03 V 的 I-V **最小平方擬合**（Rsh = 1／斜率）：自己算與表上值 57 個全部一致；只用兩端點相減會差 1～3%，所以是擬合不是兩點
+    - `Rs (ohm)`＝**Voc（電流為 0，即 |J| 最低點）附近** ±0.03 V 的同樣擬合，也就是**偏移後的 Rsh**：偏移後自己算的值與 `Rs` 欄全部一致（例：G5-4 1.724×10⁷、G14-2 4.851×10⁷）
+    - 沒有偏移的 pixel 兩欄相同（Voc 就在 0 V）；這也順帶驗證了 B-2 偏移邏輯與儀器一致
+  - **偏移對 Rsh 的影響**：39 個有偏移的 pixel，偏移後 Rsh／原始 Rsh 中位數 0.97，最小 0.315（G14-2，偏移 −0.06 V：1.54×10⁸ → 4.85×10⁷ Ω）；Thermal D\* ∝ √Rsh，該顆 D\* 變為 0.56 倍
+  - **只當對照與測試**：自己從曲線算；做 B-4 時用這兩欄寫測試（未偏移＝`Rsh` 欄、偏移後＝`Rs` 欄），確保算法與儀器一致
+  - 明志檔沒有這張表
+  - 目前的讀檔會把這張表截掉，B-4 需新增讀取（只給對照用）
+- 輸出：每條曲線一列（$R_{sh}$、0 V／−0.1 V／−0.5 V 的 $J_d$ 與 $I_d$；PD-QE 另列儀器的 Rsh、Isc 對照），寫進 Excel 與 API
 
 #### C. EQE 與 R-plot
 來源：V5 `process_eqe_pd_logic`、`process_eqe_old_logic`、`EQEPreviewWindow`、`RplotPreviewWindow`
@@ -454,13 +470,24 @@ tags: [auto-control, datahub, LCT, 規格, 數據分析, V5, V6]
 
 **D-1　Noise 數據整合　`舊`**
 - **貴儀 PD**：CSV，第 C 欄頻率、第 D 欄雜訊電流（A/√Hz）
-- **明志 NF**：多種格式，取前兩欄
+- **明志 NF**：多種格式，取前兩欄（**測試檔待補**，Gino 2026-11 下旬補；目前先只做 PD-QE）
 - 輸出：`Combined`（頻率聯集）＋每檔一個 sheet
+- **PD-QE 實際檔案結構（2026-11-15 以 `test_for_develop/Noise_test_file` 確認）**
+  - 每個 pixel 一個 CSV，**逗號分隔、編碼為 cp950（Big5）**（表頭的 `√` 是 Big5 的 `A1 D4`，用 UTF-8 讀會變亂碼）
+  - 表頭：`Time (s), Current, Frequency (Hz), Noise Current (A/√Hz)`
+  - 前兩欄是時域電流：2000 列，間隔 5 ms、共 10 s（取樣 200 Hz）
+  - 後兩欄是頻譜：1201 列，0～100 Hz、間隔 1/12 Hz（約 0.0833 Hz）；**第一列 0 Hz 的雜訊為 `Inf`，要略過**；頻譜結束後這兩欄為空白
+  - **檔名＝pixel 名稱＋偏壓**：`G1-2.csv`（0 V）、`G1-2_-0.1V.csv`（−0.1 V）；同資料夾的 `.jpg` 為儀器截圖，忽略
+  - **只用頻譜**（2026-11-15）：時域電流不輸出、不畫圖
+  - **Shot 參考線用相同偏壓的暗電流**（2026-11-15）：偏壓由檔名讀出（無後綴＝0 V、`_-0.1V`＝−0.1 V），配 B-4 同電壓的 $I_{dark}$
+  - 測試檔 6 顆 pixel 各兩種偏壓：G1-2、G2-1、G5-3、G6-1、G7-1、G8-2；其中 **G1-2 不在暗電流測試檔中**（JD 只有 G1-3、G1-4），可用來測試 D-2「對應不到時讓使用者確認」
 
 **D-2　Noise 繪圖　`舊`**
 - 頻率對雜訊電流（A/√Hz）的雙對數圖
-- **重現 Shot 與 Thermal 的水平參考線**（已確認）；**Dark I 與 $R_{sh}$ 由使用者輸入**
-  - 沒輸入時不畫線（原量測軟體沒輸入會顯示 Shot=0、Johnson=Inf，已確認是未輸入）
+- **Shot 與 Thermal 參考線改為選用，數值自動取自 B 區**（2026-11-15，取代原本「Dark I 與 $R_{sh}$ 由使用者輸入」）
+  - 使用者勾選「顯示 Shot／Thermal 參考線」才畫；不勾就只看 noise
+  - $I_{dark}$ 與 $R_{sh}$ 取自同一專案 B-4 擷取值（暗電流電壓同 B-4 的選擇，有偏移時用偏移後的數據）
+  - **對應方式**：Noise 與暗電流的 **pixel 名稱相同就是同一顆**；對應不到的樣品跳出視窗讓使用者確認（手動選對應的暗電流 pixel），也可以忽略，該樣品就不畫參考線
   - 筆記：[[噪聲電流]]
   - 公式：$i_{sh}=\sqrt{2qI_{dark}\Delta f}$、$i_{th}=\sqrt{4k_BT\Delta f/R_{sh}}$
 
@@ -711,6 +738,14 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | 2 | 舊型樣品名稱（預設 S1、S2…）存檔前詢問是否命名（`rename_curves`；空白、重複會拋出 `EqeNameError`） | `核心已完成` |
 | 3 | 下載整合 Excel：依儀器各一份（`write_eqe_excels`） | `核心已完成` |
 | 4 | C-2、C-3 的曲線勾選、疊圖、範圍輸入（X 軸由使用者輸入、EQE 軸預設 0–100）、右軸開關與 PNG 下載（`select_eqe_curves`、`plot_eqe`、`plot_rplot`、`figure_to_png`） | `核心已完成` |
+
+**C 區 Reflex 頁面規劃（2026-11-15 定案）**：四個步驟標籤
+| 標籤 | 內容 |
+| --- | --- |
+| `c-1 上傳` | 上傳 → 樣品清單（儀器、Jsc、量測時間）→ 下載 Excel；EQE 不需面積確認。**自動偵測舊型儀器**：有舊型樣品（預設 S1、S2…）時，**必須先命名**才能進入分組 |
+| `c-2 分組` | 依專案條件分組，**分組單位與 B 區相同**（樣品：名稱開頭代號，G1-1、G1-2 → G1）；需補 C 區分組 API（預覽、確認、`devices`） |
+| `c-3 EQE 與積分電流` | 勾選清單（與 B 區相同的「條件區塊＋每個樣品一直行＋暫時隱藏」，圖固定在右側）＋X 軸（使用者輸入，無預設）、EQE 軸（預設 0–100）、積分電流軸、右軸開關 |
+| `c-4 R-plot` | 與 c-3 分開的分頁；勾選清單同上＋X、Y 範圍 |
 - D Noise：Dark I 與 $R_{sh}$ 輸入欄（沒輸入就不畫參考線）
 - F 色票：選 4–7 色、點色塊複製、預覽 JV 與 EQE 效果、下載色票
 - G-1 使用紀錄：以登入的使用者為單位（2026-11-14 改，不再做裝置命名）
@@ -732,7 +767,10 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | G-4 | `GET /users/{user}/projects` | 使用者的專案（新的在前） |
 | G-4 | `POST /users/{user}/projects` | 新增專案（名稱＋條件名稱） |
 | G-4 | `GET /users/{user}/projects/{project}` | 專案內容：條件、各區目前的 `job_id` |
-| G-4 | `PUT /users/{user}/projects/{project}/conditions` | 修改條件（`old`→`new`；改名更新各區分組；已使用的不能刪） |
+| G-4 | `PUT /users/{user}/projects/{project}/conditions` | 修改條件（`old`→`new`；改名更新各區分組與總覽分組；已使用的不能刪） |
+| G-4 | `PUT /users/{user}/projects/{project}/grouping` | 確定總覽分組（樣品可為範圍字串如 `G1-G4, G7` 或代號清單；空白略過）；各區可「套用總覽的分組」（2026-11-15） |
+| G-4 | `GET /users/{user}/projects/{project}/samples` | 各區目前工作的樣品聯集（總覽分組的樣品清單） |
+| G-4 | `POST /users/{user}/projects/{project}/grouping/preview` | 總覽分組預填（平均分配／自訂／自動，同各區；樣品由前端送出：各區樣品＋手動加入） |
 | A | `POST /jv/jobs?user=&project=` | 上傳 JV CSV（只接受 .csv，其他列在 `skipped`）到專案；回傳檔案、樣品、面積檢查、專案條件 |
 | A | `GET /jv/jobs/{id}` | 工作內容（含已確認分組與缺檔清單 `missing`） |
 | A | `PUT /jv/jobs/{id}/area` | 面積確認：`null` 忽略並繼續；數值重算 J、Jsc、PCE |
@@ -747,11 +785,15 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | B | `PUT /dark/jobs/{id}/settings` | 指定面積、最低點處理（保持原始／偏移到 0 V）；已確認的分組保留 |
 | B | `POST /dark/jobs/{id}/grouping/preview` | 元件分組預填（與 A 區相同，不存檔）（2026-11-14） |
 | B | `PUT /dark/jobs/{id}/conditions` | 確認元件分組（只影響畫圖勾選排列）（2026-11-14） |
-| B | `GET /dark/jobs/{id}/excel` | 下載 Excel（依儀器） |
+| B | `GET /dark/jobs/{id}/excel` | 下載 Excel（依儀器；含 `Rsh_Jd` sheet） |
+| B | `GET /dark/jobs/{id}/extract` | B-4 擷取值：Rsh、A·Rsh、0／−0.1／−0.5 V 的 Jd 與 Id、PD-QE 儀器對照（2026-11-15） |
+| B | `PUT /dark/jobs/{id}/extract-bias` | 選擇 E 區使用的暗電流電壓（0、−0.1、−0.5 V） |
 | B | `POST /dark/jobs/{id}/plots/dark` | 暗電流圖 |
 | C | `POST /eqe/jobs?user=&project=` | 上傳 EQE 檔到專案；回傳樣品與 Jsc |
 | C | `GET /eqe/jobs/{id}` | 工作內容 |
-| C | `PUT /eqe/jobs/{id}/names` | 改名（原名 → 新名，送完整對照） |
+| C | `PUT /eqe/jobs/{id}/names` | 改名（原名 → 新名，送完整對照）；樣品組成改變時清除已確認的分組 |
+| C | `POST /eqe/jobs/{id}/grouping/preview` | 樣品分組預填（同 B 區，樣品＝名稱開頭代號）；舊型樣品未命名（`unnamed` 不為空）回 400（2026-11-15） |
+| C | `PUT /eqe/jobs/{id}/conditions` | 確認樣品分組；條件須在專案條件中、全部分配、舊型已命名（2026-11-15） |
 | C | `GET /eqe/jobs/{id}/excel` | 下載 Excel（依儀器） |
 | C | `POST /eqe/jobs/{id}/plots/eqe` | C-2 EQE 加積分電流圖 |
 | C | `POST /eqe/jobs/{id}/plots/rplot` | C-3 R-plot |
@@ -835,6 +877,8 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | 套件管理 | **uv**（需先安裝 uv） | 版本由 `uv.lock` 鎖定，**`uv.lock` 要一起 commit** |
 | 作業系統 | 開發機為 Windows 11 | 程式用 `pathlib`，不寫死路徑分隔符號 |
 | 字體 | **Arial**（所有圖都指定 Arial） | 屬於作業系統字體，不是 Python 套件；Windows 內建。Linux／macOS 若沒有 Arial 會自動退回 DejaVu Sans，圖的字體會不同 |
+| 介面中文字體 | **源流明體 GenRyuMin**（2026-11-15 決定），下載：https://github.com/ButTaiwan/genryu-font | SIL OFL 1.1，可商用。**換電腦時要安裝**（到 Releases 下載，安裝 TW 版）；沒裝的電腦會退回 Noto Serif TC（Google Fonts）。部署到 813 給其他電腦使用時，需改成由網站提供字體檔（見 `front/front/front.py` 的 TODO） |
+| 介面英數字體 | Sora（字標、大標）、JetBrains Mono（數值、單位） | 皆為 SIL OFL 1.1，目前由 Google Fonts 載入 |
 
 **專案本體 `lct-datahub`（`pyproject.toml` 的 `dependencies`）**
 | 套件 | 開發機版本 | 用途 | 使用位置 |
@@ -875,7 +919,8 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 6. 新增套件後，更新本節的表格與版本
 
 **測試資料資料夾**（測試與示範腳本會用到；不在時測試自動略過，但示範腳本會失敗）
-- `JV_test_file/`（A 區）、`JD_test_file/`（B 區）、`EQE_test_file/`（C 區）：這三個資料夾要隨專案一起帶到新電腦（commit 或另外複製）
+- **2026-11-15 起統一放在 `test_for_develop/`**：`JV_test_file/`（A 區）、`JD_test_file/`（B 區）、`EQE_test_file/`（C 區）、`Noise_test_file/`（D 區，目前只有 PD-QE，明志待補）；要隨專案一起帶到新電腦（commit 或另外複製）
+- 注意：資料夾不在時測試是「略過」不是「失敗」，搬動資料夾後要確認 `uv run pytest -rs` 沒有出現被略過的測試
 - `Result/` 是輸出，已加入 `.gitignore`，不需要帶
 
 **選配、尚未使用**
@@ -911,7 +956,7 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | 2026-10-13 | E 區衍生指標 | 目前都暫時不需要（`暫緩`） |
 | 2026-10-13 | Box 圖數值篩選 | 可使用，也可忽略 |
 | 2026-10-13 | 暗電流儀器 | PD-QE，以及明志自行搭建、搭配 Keithley 2636A 的系統（沒有第三種） |
-| 2026-10-13 | Noise 參考線 | 重現；Dark I 與 $R_{sh}$ 由使用者輸入 |
+| 2026-10-13 | Noise 參考線 | 重現；Dark I 與 $R_{sh}$ 由使用者輸入（2026-11-15 改為選用、取自 B 區） |
 | 2026-10-13 | 裝置紀錄 md | 存 813 本機，不同步進 vault |
 | 2026-10-13 | 輸出圖片格式 | PNG |
 | 2026-10-13 | 工作資料 | 存 813 本機即可 |
@@ -975,11 +1020,20 @@ front/                   # Reflex 前端（獨立的 uv 專案，不是根目錄
 | 2026-11-14 | 專案條件 | 專案統一定義條件名稱，各區分組只能選用（API 檢查）；自動分組名稱依序取專案條件；條件改名同步各區分組，已使用的不能刪 |
 | 2026-11-14 | 開啟專案 | 直接帶出各區已有的結果（含分組與設定）；重新上傳取代該區工作，舊資料夾保留；面積已確認的不再詢問 |
 | 2026-11-14 | 舊工作資料 | `data/jobs/` 為測試資料，不搬移；資料根目錄改為 `data/`（`LCT_WORK_ROOT`） |
+| 2026-11-15 | B-4 擷取值 | 暗電流預設 0 V，可選 −0.1 V、−0.5 V；$R_{sh}$ 取 −0.03～0.03 V 斜率（Ω）；有偏移時一律用偏移後數據；PD-QE 與明志都從曲線自己算，PD-QE 檔底部彙整表只當對照 |
+| 2026-11-15 | 總覽分組 | **畫面與各區相同**（預設平均分配＋格子微調，「使用者自訂」才手動輸入範圍）；樣品＝各區已上傳樣品聯集＋手動加入；存在 project.json；各區分組步驟可「套用總覽的分組」（只取該區有的樣品，多出來的放未分配），再微調確定；條件改名同步、被總覽分組使用的條件不能刪 |
+| 2026-11-15 | 介面調整 | 登入鈕改為 LOGIN；套用分組／確定分組後自動捲到下一步；繪圖參數兩欄格狀、輸入框同高，EQE 軸與積分電流軸上下排；繪圖頁縮小頁首、圖依剩餘高度縮放，14 吋筆電一頁顯示 |
+| 2026-11-15 | D 區（PD-QE） | 只用頻譜（不輸出時域電流）；Shot 參考線用與 noise 檔相同偏壓（由檔名讀出）的暗電流；明志測試檔待補，先只做 PD-QE；順序：C 區前端 → D 區核心 |
+| 2026-11-15 | D-2 參考線 | 改為選用；$I_{dark}$、$R_{sh}$ 取自 B-4；pixel 名稱相同即同一顆，對應不到時讓使用者確認或忽略 |
+| 2026-11-15 | C 區分組 API | 「未命名」的判斷：舊型儀器樣品的目前名稱仍等於原始自動編號（S1 本身也符合樣品代號格式，不能用「認不出樣品」判斷）；`device_of` 移到共用的 `core/sample_id.py`（B、C 共用） |
+| 2026-11-15 | C 區頁面 | 標籤：c-1 上傳、c-2 分組、c-3 EQE 與積分電流、c-4 R-plot（c-3、c-4 分開）；舊型儀器樣品自動偵測，須先命名才能分組；分組單位同 B 區（樣品） |
+| 2026-11-15 | 介面中文字體 | 源流明體 GenRyuMin（https://github.com/ButTaiwan/genryu-font），換電腦要安裝；英數維持 Sora、JetBrains Mono |
 | 2026-11-14 | 開發順序 | A、B 實測與 commit → 登入與專案 → C、D 頁面 → B-4 → E → 報告輸出 |
 
 ### 6-3　仍待確認
 1. ~~裝置紀錄 md 的資料夾路徑~~：2026-11-14 改為以使用者為主，紀錄放在 `data/users/<使用者>/`
-2. **B-4 $R_{sh}$**：擬合範圍（±0.01 V 或 ±0.05 V，固定或可選）；偏移後用偏移後或原始電壓；存 Ω 或 Ω·cm²
+2. ~~B-4 $R_{sh}$~~：2026-11-15 已定案（−0.03～0.03 V、偏移後數據、Ω），見 B-4
+5. **D 區測試檔**：貴儀 PD、明志 NF 各一份以上；E 區實測 D\* 要取哪個頻率的 $i_n$（或平均）
 3. **E 區 D\* 輸出**：整條光譜、峰值或指定波長；是否另給合併 Shot 與 Thermal 的版本
 4. **PPT 模板**：待 Gino 提供，再整理代號清單
 

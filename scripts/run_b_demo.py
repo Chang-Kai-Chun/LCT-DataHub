@@ -10,7 +10,7 @@ from lct_datahub.core.dark_current.types import ShiftMode
 from lct_datahub.core.plotting import figure_to_png, plot_dark_current
 
 ROOT = Path(__file__).resolve().parent.parent
-RAW = ROOT / "JD_test_file"  # 原始資料
+RAW = ROOT / "test_for_develop" / "JD_test_file"  # 原始資料
 OUT = ROOT / "Result" / "B"  # 輸出資料夾
 OUT.mkdir(parents=True, exist_ok=True)
 

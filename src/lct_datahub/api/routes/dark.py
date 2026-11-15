@@ -23,7 +23,8 @@ from lct_datahub.core.dark_current.export import write_dark_excels
 from lct_datahub.core.dark_current.integrate import dark_areas, is_dark_file, read_dark_files
 from lct_datahub.core.dark_current.select import device_list, device_of, select_dark_curves
 from lct_datahub.core.dark_current.shift import shift_curves
-from lct_datahub.core.dark_current.types import DarkCurve, ShiftMode
+from lct_datahub.core.dark_current.extract import extract_all
+from lct_datahub.core.dark_current.types import DarkCurve, ExtractBias, ShiftMode
 from lct_datahub.core.plotting import plot_dark_current
 from lct_datahub.core.sample_id import SampleId
 
@@ -47,6 +48,7 @@ class DarkSettings(DarkSettingsIn):
 
     area_confirmed: bool = False
     conditions: list[ConditionModel] | None = None
+    extract_bias: ExtractBias = ExtractBias.ZERO  # B-4：E 區與報告使用的暗電流電壓（預設 0 V）
 
 
 class DarkCurveOut(BaseModel):
@@ -76,6 +78,35 @@ class DarkJobOut(BaseModel):
     devices: list[str]  # 所有元件（分組用的樣品清單），依代號排序
     project_conditions: list[str]  # 專案統一的條件名稱（分組只能用這些）
     curves: list[DarkCurveOut]
+
+
+class ExtractRowOut(BaseModel):
+    """B-4 一條曲線的擷取值；電壓的鍵為字串（"0"、"-0.1"、"-0.5"）。"""
+
+    name: str
+    device: str | None
+    instrument: str
+    shift: float  # 偏移量（V）；0 為未偏移
+    area: float  # cm²
+    rsh: float | None  # Ω（−0.03～0.03 V 擬合）
+    rsh_area: float | None  # Ω·cm²
+    jd: dict[str, float | None]  # A/cm²
+    id: dict[str, float | None]  # A
+    reference_rsh: float | None  # PD-QE 儀器對照（未偏移＝表上 Rsh、偏移後＝表上 Rs）
+
+
+class ExtractOut(BaseModel):
+    """B-4 擷取值：目前選定的暗電流電壓與每條曲線的值。"""
+
+    bias: ExtractBias
+    biases: list[ExtractBias] = list(ExtractBias)
+    rows: list[ExtractRowOut]
+
+
+class ExtractBiasIn(BaseModel):
+    """選擇 E 區使用的暗電流電壓。"""
+
+    bias: ExtractBias
 
 
 class DarkPlotIn(BaseModel):
@@ -164,6 +195,35 @@ def _confirm(store: JobStore, job_id: str, body: ConditionsIn) -> DarkJobOut:
     return _job_out(store, job)
 
 
+def _bias_key(bias: ExtractBias) -> str:
+    """電壓的字串鍵（0.0 → "0"、-0.1 → "-0.1"）。"""
+    return f"{bias.value:g}"
+
+
+def _extract(store: JobStore, job_id: str) -> ExtractOut:
+    """B-4 擷取值（使用目前的面積與偏移設定）。"""
+    job = store.get(SECTION, job_id)
+    _, settings, curves = _state(store, job)
+    rows = [
+        ExtractRowOut(
+            name=e.name, device=_device_text(e.name), instrument=e.instrument.value, shift=e.shift, area=e.area,
+            rsh=e.rsh, rsh_area=e.rsh_area,
+            jd={_bias_key(b): v for b, v in e.jd.items()}, id={_bias_key(b): v for b, v in e.id.items()},
+            reference_rsh=e.reference_rsh,
+        )
+        for e in extract_all(curves)
+    ]
+    return ExtractOut(bias=settings.extract_bias, rows=rows)
+
+
+def _set_extract_bias(store: JobStore, job_id: str, bias: ExtractBias) -> ExtractOut:
+    """儲存 E 區使用的暗電流電壓。"""
+    job = store.get(SECTION, job_id)
+    settings = store.load_settings(job, DarkSettings)
+    store.save_settings(job, settings.model_copy(update={"extract_bias": bias}))
+    return _extract(store, job_id)
+
+
 def _excel(store: JobStore, job_id: str):
     """寫出 Excel 並組出下載回應。"""
     job = store.get(SECTION, job_id)
@@ -225,3 +285,20 @@ async def download_excel(job_id: str, store: JobStore = Depends(get_store)):
 async def dark_plot(job_id: str, body: DarkPlotIn, store: JobStore = Depends(get_store)):
     """B-3：暗電流圖 PNG（有偏移時右上角註記 shift）。"""
     return await asyncio.to_thread(_dark_png, store, job_id, body)
+
+
+def job_samples(store: JobStore, job: Job) -> list[str]:
+    """工作中的樣品（給專案總覽分組；B 區樣品＝曲線名稱開頭代號）。"""
+    return [str(d) for d in _devices(store, job)]
+
+
+@router.get("/jobs/{job_id}/extract", response_model=ExtractOut)
+async def get_extract(job_id: str, store: JobStore = Depends(get_store)) -> ExtractOut:
+    """B-4 擷取值：每條曲線的 Rsh、A·Rsh、0／−0.1／−0.5 V 的 Jd 與 Id（有偏移時用偏移後的電壓）。"""
+    return await asyncio.to_thread(_extract, store, job_id)
+
+
+@router.put("/jobs/{job_id}/extract-bias", response_model=ExtractOut)
+async def set_extract_bias(job_id: str, body: ExtractBiasIn, store: JobStore = Depends(get_store)) -> ExtractOut:
+    """選擇 E 區使用的暗電流電壓（0、-0.1、-0.5 V；其他值回 422）。"""
+    return await asyncio.to_thread(_set_extract_bias, store, job_id, body.bias)

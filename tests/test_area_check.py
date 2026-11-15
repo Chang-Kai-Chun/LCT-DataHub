@@ -8,7 +8,7 @@ from lct_datahub.core.area_check import check_areas
 from lct_datahub.core.jv.integrate import jv_areas
 from lct_datahub.core.jv.reader import list_jv_csv, read_jv_files
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "JV_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JV_test_file"
 
 
 def test_uniform():

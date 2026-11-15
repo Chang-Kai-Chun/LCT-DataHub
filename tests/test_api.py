@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from lct_datahub.api.main import create_app
 
 ROOT = Path(__file__).resolve().parent.parent
-JV_DIR, JD_DIR, EQE_DIR = ROOT / "JV_test_file", ROOT / "JD_test_file", ROOT / "EQE_test_file"
+JV_DIR, JD_DIR, EQE_DIR = ROOT / "test_for_develop" / "JV_test_file", ROOT / "test_for_develop" / "JD_test_file", ROOT / "test_for_develop" / "EQE_test_file"
 PNG_MAGIC = b"\x89PNG"
 USER, PROJECT = "Tester", "2026-11 測試 1 mol%"  # 專案名稱含中文、空格與 %，測試網址編碼
 PROJECT_CONDITIONS = ["Ref", "0.2%", "A", "B"]
@@ -106,6 +106,33 @@ def test_eqe_flow(client):
     assert sorted(zipfile.ZipFile(io.BytesIO(res.content)).namelist()) == ["Eqe_Old.xlsx", "Eqe_PD-QE.xlsx"]
 
 
+@needs(EQE_DIR)
+def test_eqe_naming_and_grouping(client):
+    """舊型樣品未命名不能分組；命名後依樣品分組（同 B 區）；改名使樣品組成改變時分組清除。"""
+    job = _upload(client, "eqe", _files(EQE_DIR)).json()
+    url = f"/api/eqe/jobs/{job['job_id']}"
+    olds = job["unnamed"]
+    assert olds == [f"S{i}" for i in range(1, 14)]
+    assert {c["device"] for c in job["curves"] if c["name"].startswith("G1-")} == {"G1"}
+    even = {"mode": "平均分配", "names": ["A", "B"]}
+    res = client.post(f"{url}/grouping/preview", json=even)
+    assert res.status_code == 400 and "命名" in res.json()["message"]
+
+    # 舊型命名為 G30-1…G30-13 後可以分組
+    names = {s: f"G30-{i}" for i, s in enumerate(olds, start=1)}
+    named = client.put(f"{url}/names", json={"names": names}).json()
+    assert named["unnamed"] == [] and "G30" in named["devices"]
+    preview = client.post(f"{url}/grouping/preview", json=even).json()
+    saved = client.put(f"{url}/conditions", json={"conditions": preview["conditions"]}).json()
+    assert saved["settings"]["conditions"] == preview["conditions"]
+
+    # 只改 pixel 編號（樣品組成不變）：分組保留；改成新樣品 G31：分組清除
+    kept = client.put(f"{url}/names", json={"names": {**names, olds[0]: "G30-99"}}).json()
+    assert kept["settings"]["conditions"] == preview["conditions"]
+    moved = client.put(f"{url}/names", json={"names": {**names, olds[0]: "G31-1"}}).json()
+    assert moved["settings"]["conditions"] is None
+
+
 # ---------- B 暗電流 ----------
 @needs(JD_DIR)
 def test_dark_flow(client):
@@ -114,7 +141,7 @@ def test_dark_flow(client):
     url = f"/api/dark/jobs/{job['job_id']}"
     # PD-QE 檔內 4.5 mm²；明志由 |I|/J 反推也是 0.045 cm²，所以一致
     assert len(job["curves"]) == 58 and job["area_report"]["uniform_value"] == 0.045
-    assert job["settings"] == {"area": None, "shift_mode": "保持原始", "area_confirmed": False, "conditions": None}
+    assert job["settings"] == {"area": None, "shift_mode": "保持原始", "area_confirmed": False, "conditions": None, "extract_bias": 0.0}
     assert not any(c["is_shifted"] for c in job["curves"])
 
     shifted = client.put(f"{url}/settings", json={"shift_mode": "偏移到 0 V", "area": 0.05}).json()
@@ -130,6 +157,24 @@ def test_dark_flow(client):
 
     res = client.get(f"{url}/excel")
     assert res.headers["content-type"] == "application/zip"
+
+
+@needs(JD_DIR)
+def test_dark_extract(client):
+    """B-4：擷取值（偏移後 Rsh＝儀器 Rs 對照）；選擇電壓會存檔；不支援的電壓 422。"""
+    job = _upload(client, "dark", _files(JD_DIR)).json()
+    url = f"/api/dark/jobs/{job['job_id']}"
+    ext = client.get(f"{url}/extract").json()
+    assert ext["bias"] == 0.0 and ext["biases"] == [0.0, -0.1, -0.5] and len(ext["rows"]) == 58
+    row = next(r for r in ext["rows"] if r["name"] == "G1-3")
+    assert row["rsh"] == pytest.approx(row["reference_rsh"], rel=1e-3) and set(row["jd"]) == {"0", "-0.1", "-0.5"}
+    client.put(f"{url}/settings", json={"shift_mode": "偏移到 0 V"})
+    shifted = {r["name"]: r for r in client.get(f"{url}/extract").json()["rows"]}
+    assert shifted["G14-2"]["rsh"] == pytest.approx(4.851e7, rel=1e-3)  # 儀器 Rs 欄
+    assert shifted["G14-2"]["rsh"] == pytest.approx(shifted["G14-2"]["reference_rsh"], rel=1e-3)
+    assert client.put(f"{url}/extract-bias", json={"bias": -0.1}).json()["bias"] == -0.1
+    assert client.get(url).json()["settings"]["extract_bias"] == -0.1
+    assert client.put(f"{url}/extract-bias", json={"bias": -0.3}).status_code == 422
 
 
 @needs(JD_DIR)
@@ -250,11 +295,50 @@ def test_projects(client):
     assert sorted(names) == sorted([PROJECT, "P2"])
     project = client.get(_project_url()).json()
     assert project["conditions"] == PROJECT_CONDITIONS and project["jobs"] == {}
+    assert project["updated"] >= project["created"]  # 最後修改時間（ISO 字串可直接比較）
 
     assert client.get("/api/users/nobody/projects").status_code == 404
     assert client.get(f"/api/users/{USER}/projects/none").status_code == 404
     res = client.post("/api/eqe/jobs", files=[("files", ("a.txt", b"x"))], params={"user": USER, "project": "none"})
     assert res.status_code == 404
+
+
+def test_project_grouping(client):
+    """總覽分組：範圍展開、空白略過；條件不在專案中或樣品重複歸組 400；條件改名同步、使用中不能刪。"""
+    body = {"conditions": [
+        {"name": "Ref", "samples": "G1-G3, g7"}, {"name": "A", "samples": "G4"}, {"name": "B", "samples": ""},
+    ]}
+    project = client.put(f"{_project_url()}/grouping", json=body).json()
+    assert project["grouping"] == [
+        {"name": "Ref", "samples": ["G1", "G2", "G3", "G7"]}, {"name": "A", "samples": ["G4"]},
+    ]
+    bad = {"conditions": [{"name": "Z", "samples": "G1"}]}
+    assert client.put(f"{_project_url()}/grouping", json=bad).status_code == 400
+    dup = {"conditions": [{"name": "Ref", "samples": "G1"}, {"name": "A", "samples": "G1"}]}
+    assert client.put(f"{_project_url()}/grouping", json=dup).status_code == 400
+
+    # 改名 Ref → Base：總覽分組一起改；刪除使用中的 A：400
+    edits = [{"old": c, "new": "Base" if c == "Ref" else c} for c in PROJECT_CONDITIONS]
+    renamed = client.put(f"{_project_url()}/conditions", json={"conditions": edits}).json()
+    assert [g["name"] for g in renamed["grouping"]] == ["Base", "A"]
+    keep = [{"old": "Base", "new": "Base"}]
+    res = client.put(f"{_project_url()}/conditions", json={"conditions": keep})
+    assert res.status_code == 400 and "總覽" in res.json()["message"]
+
+
+@needs(JD_DIR)
+def test_project_grouping_samples_and_preview(client):
+    """總覽分組：樣品清單為各區樣品聯集；預填同各區（樣品由前端送）；確定時可送樣品清單。"""
+    assert client.get(f"{_project_url()}/samples").json() == []
+    _upload(client, "dark", _files(JD_DIR))
+    samples = client.get(f"{_project_url()}/samples").json()
+    assert "G1" in samples and samples.index("G2") < samples.index("G10")  # 依數字大小排序
+
+    body = {"mode": "平均分配", "names": ["Ref", "A"], "samples": samples}
+    preview = client.post(f"{_project_url()}/grouping/preview", json=body).json()
+    assert [c["name"] for c in preview["conditions"]] == ["Ref", "A"] and preview["unassigned"] == []
+    saved = client.put(f"{_project_url()}/grouping", json={"conditions": preview["conditions"]}).json()
+    assert saved["grouping"] == preview["conditions"]
 
 
 def test_grouping_needs_project_conditions(client):

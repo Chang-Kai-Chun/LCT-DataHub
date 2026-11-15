@@ -1,13 +1,13 @@
-"""B 區暗電流的狀態：上傳 → 面積確認 → 最低點偏移 → Excel → 元件分組 → 暗電流圖。
+"""B 區暗電流的狀態：b-1 整合（上傳、面積、偏移、Excel）→ b-2 分組 → b-3 暗電流圖。
 
-伺服器（FastAPI）保存工作資料夾與設定（面積、偏移方式、元件分組）；這裡只保存畫面需要的內容。
+伺服器（FastAPI）保存工作資料夾與設定（面積、偏移方式、分組）；這裡只保存畫面需要的內容。
 API 的設定是一次送出 area 與 shift_mode 兩項，因此兩者都由這裡記住並一起送出。
-分組邏輯與 A 區相同（GroupingMixin），分組單位是「元件」（G1-1、G1-2 → G1），只影響畫圖勾選清單的排列。
+分組邏輯與 A 區相同（GroupingMixin），分組單位是「樣品」（G1-1、G1-2 → G1），只影響畫圖勾選清單的排列；
+勾選清單（條件區塊、每個樣品一直行、暫時隱藏）來自 CurvePickerMixin，與 C 區共用。
 工作放在目前專案底下（G-4）：上傳時帶 user、project；頁面載入時帶出專案已有的 B 區結果。
 所有 API 呼叫都是 async，失敗時開啟 ErrorState 的警告視窗。
 """
-import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import reflex as rx
 
@@ -16,6 +16,7 @@ from front.api_client import ApiError
 from front.enums import DarkTab, ErrorKind, Section, ShiftMode
 from front.states.common import AreaRow, fmt, parse_float, png_data_url
 from front.states.grouping import GroupingMixin
+from front.states.picker import CurvePickerMixin, PickCurve
 from front.states.session import SessionState
 
 SECTION = Section.DARK
@@ -24,10 +25,6 @@ UPLOAD_ID = "dark_upload"
 UPLOAD_TYPE = "application/octet-stream"  # 副檔名有 txt、csv、dat、xlsx、xls，統一用二進位上傳
 EXCEL_FALLBACK_NAME = "Dark.zip"  # 伺服器沒給檔名時使用
 PLOT_NAME = "Dark_current.png"
-ALL_DEVICES_TITLE = "全部元件（尚未分組）"
-OTHERS_TITLE = "其他（名稱無法辨識元件）"
-OTHERS_COLUMN = "—"
-_DIGITS = re.compile(r"(\d+)")
 # 上傳元件接受的副檔名（與 api/jobs.py 的 Section.DARK 相同）
 ACCEPT = {"application/octet-stream": [".txt", ".csv", ".dat", ".xlsx", ".xls"]}
 
@@ -51,20 +48,24 @@ class DarkCurveRow:
 
 
 @dataclass
-class DeviceColumn:
-    """畫圖勾選清單的一個直行：一個元件與它的曲線。"""
+class ExtractRow:
+    """B-4 擷取值的一列（數值已轉成顯示用文字）。"""
 
-    device: str = ""
-    curves: list[str] = field(default_factory=list)
+    name: str = ""
+    instrument: str = ""
+    shifted: bool = False
+    shift: str = ""
+    rsh: str = ""
+    reference_rsh: str = ""  # PD-QE 儀器對照；明志為空白
+    rsh_area: str = ""
+    jd_0: str = ""
+    jd_01: str = ""
+    jd_05: str = ""
 
 
-@dataclass
-class PlotBlock:
-    """畫圖勾選清單的一個區塊：一個條件（或尚未分組時的全部元件），內含多個元件直行。"""
-
-    title: str = ""
-    curves: list[str] = field(default_factory=list)  # 區塊內全部曲線（給「整組勾選」）
-    columns: list[DeviceColumn] = field(default_factory=list)
+def _sci(value) -> str:
+    """科學記號 4 位有效數字；None 顯示 —。"""
+    return "—" if value is None else f"{value:.4g}"
 
 
 def _fmt_shift(value: float) -> str:
@@ -72,22 +73,11 @@ def _fmt_shift(value: float) -> str:
     return f"{value:+.3f}"
 
 
-def _natural_key(name: str) -> list:
-    """自然排序：數字依大小比較（G1-2 排在 G1-10 前面）。"""
-    return [int(p) if p.isdigit() else p.lower() for p in _DIGITS.split(name)]
-
-
-def _block(title: str, devices: list[str], by_device: dict[str, list[str]]) -> PlotBlock:
-    """組出一個區塊：每個元件一個直行（沒有曲線的元件略過）。"""
-    columns = [DeviceColumn(d, by_device[d]) for d in devices if by_device.get(d)]
-    return PlotBlock(title, [n for c in columns for n in c.curves], columns)
-
-
-class DarkState(GroupingMixin, SessionState):
-    """暗電流頁面的狀態（SessionState 的子狀態：讀得到使用者與專案，共用警告視窗；分組狀態來自 GroupingMixin）。"""
+class DarkState(CurvePickerMixin, GroupingMixin, SessionState):
+    """暗電流頁面的狀態（SessionState 的子狀態：讀得到使用者與專案，共用警告視窗）。"""
 
     # 共用
-    tab: str = DarkTab.UPLOAD.value
+    tab: str = DarkTab.INTEGRATE.value
     loading: bool = False
     loaded_project: str = ""  # 目前畫面內容屬於哪個「使用者/專案」（換專案時清除）
 
@@ -112,15 +102,17 @@ class DarkState(GroupingMixin, SessionState):
     # 最低點偏移（B-2）
     shift_mode: str = ShiftMode.KEEP.value
 
-    # 暗電流圖（B-3）
-    plot_selected: list[str] = []
-    hidden_blocks: list[str] = []  # 暫時隱藏的區塊標題：勾選保留，但不畫進圖
+    # 暗電流圖（B-3）；勾選、暫時隱藏在 CurvePickerMixin
     skip_dialog_open: bool = False  # 「略過分組」的二次確認視窗
     x_min: str = ""
     x_max: str = ""
     y_min: str = ""
     y_max: str = ""
+    range_key: int = 0  # 範圍輸入框為非受控，改回自動時遞增 key 讓輸入框重新掛載
     plot_png: str = ""
+
+    # 擷取值（B-4）；E 區使用哪個電壓由 E 區選擇（API 的 extract-bias），這裡只顯示數值
+    extract_rows: list[ExtractRow] = []
 
     # ---------- 計算屬性 ----------
     @rx.var
@@ -149,53 +141,22 @@ class DarkState(GroupingMixin, SessionState):
         return self.shift_mode == ShiftMode.SHIFT.value
 
     @rx.var
-    def plot_blocks(self) -> list[PlotBlock]:
-        """畫圖勾選清單（區塊 → 元件直行 → 曲線）。"""
-        return self._build_blocks()
-
-    @rx.var
-    def hidden_selected_count(self) -> int:
-        """已勾選但因區塊暫時隱藏而不畫的曲線數。"""
-        return len(self.plot_selected) - len(self._visible_selected())
-
-    def _visible_selected(self) -> list[str]:
-        """依顯示順序取出已勾選、且不在隱藏區塊內的曲線。"""
-        hidden = set(self.hidden_blocks)
-        chosen = set(self.plot_selected)
-        return [n for b in self._build_blocks() if b.title not in hidden for n in b.curves if n in chosen]
-
-    def _build_blocks(self) -> list[PlotBlock]:
-        """已確認分組時每個條件一個區塊，否則全部元件一個區塊；元件各一直行。
-
-        直行內曲線依自然排序；名稱無法辨識元件的曲線放在最後的「其他」區塊。
-        """
-        by_device: dict[str, list[str]] = {}
-        others: list[str] = []
-        for c in self.curves:
-            if c.device:
-                by_device.setdefault(c.device, []).append(c.name)
-            else:
-                others.append(c.name)
-        by_device = {d: sorted(names, key=_natural_key) for d, names in by_device.items()}
-
-        if self.groups_confirmed:
-            blocks = [_block(c.name, c.samples, by_device) for c in self.conditions]
-        else:
-            blocks = [_block(ALL_DEVICES_TITLE, self.samples, by_device)]
-        if others:
-            blocks.append(PlotBlock(OTHERS_TITLE, others, [DeviceColumn(OTHERS_COLUMN, others)]))
-        return [b for b in blocks if b.curves]
+    def plot_locked(self) -> bool:
+        """目前在 b-3 暗電流圖：整頁不捲動，只有勾選清單捲動。"""
+        return self.tab == DarkTab.PLOT.value
 
     # ---------- 分頁與輸入框 ----------
     @rx.event
-    def set_tab(self, value: str) -> None:
-        """切換分頁。"""
+    def set_tab(self, value: str):
+        """切換分頁；進入 b-4 時重新取得擷取值（面積、偏移可能改過）。"""
         self.tab = value
+        if value == DarkTab.EXTRACT.value and self.job_id:
+            return DarkState.load_extract
 
     @rx.event
-    def go_to(self, tab: str) -> None:
+    def go_to(self, tab: str):
         """「下一步」按鈕：切到指定分頁。"""
-        self.tab = tab
+        return DarkState.set_tab(tab)
 
     @rx.event
     def set_area_input(self, value: str) -> None:
@@ -268,9 +229,9 @@ class DarkState(GroupingMixin, SessionState):
         if not self.area_override:
             self.derived_sources = sorted({c.source for c in self.curves if not c.area_from_file})
 
-        # 第一次載入時，暗電流圖預設全選
-        if not self.plot_selected:
-            self.plot_selected = self._in_display_order({c.name for c in self.curves})
+        # 勾選清單（CurvePickerMixin）：第一次載入時預設全選
+        self.pick_curves = [PickCurve(c.name, c.device) for c in self.curves]
+        self._init_selection()
 
     # ---------- GroupingMixin 需要的方法 ----------
     def _job_path(self) -> str:
@@ -292,7 +253,8 @@ class DarkState(GroupingMixin, SessionState):
             self._handle_error(err)
             return False
         self._apply_job(data)
-        self.plot_png = ""  # 設定改變後，舊的圖失效
+        self.plot_png = ""  # 設定改變後，舊的圖與擷取值失效（進入 b-4 時重新取得）
+        self.extract_rows = []
         return True
 
     def _current_area(self) -> float | None:
@@ -438,50 +400,37 @@ class DarkState(GroupingMixin, SessionState):
             self.loading = False
         yield rx.download(data=content, filename=name)
 
+    # ---------- 擷取值（B-4） ----------
+    def _apply_extract(self, data: dict) -> None:
+        """把 API 回傳的擷取值（ExtractOut）填入狀態。"""
+        self.extract_rows = [
+            ExtractRow(
+                name=r["name"], instrument=r["instrument"], shifted=r["shift"] != 0, shift=_fmt_shift(r["shift"]),
+                rsh=_sci(r["rsh"]), reference_rsh="" if r["reference_rsh"] is None else _sci(r["reference_rsh"]),
+                rsh_area=_sci(r["rsh_area"]),
+                jd_0=_sci(r["jd"].get("0")), jd_01=_sci(r["jd"].get("-0.1")), jd_05=_sci(r["jd"].get("-0.5")),
+            )
+            for r in data["rows"]
+        ]
+
+    @rx.event
+    async def load_extract(self):
+        """取得擷取值（使用目前的面積與偏移設定）。"""
+        self.loading = True
+        yield
+        try:
+            data = await api.get_json(f"/dark/jobs/{self.job_id}/extract")
+        except ApiError as err:
+            self._handle_error(err)
+            return
+        finally:
+            self.loading = False
+        self._apply_extract(data)
+
     # ---------- 暗電流圖（B-3） ----------
-    def _in_display_order(self, names: set[str]) -> list[str]:
-        """依勾選清單的顯示順序（條件 → 元件 → 曲線）排列；圖例也會依此順序。"""
-        order = [n for b in self._build_blocks() for n in b.curves]
-        return [n for n in order if n in names]
-
-    @rx.event
-    def toggle_plot_curve(self, name: str, checked: bool) -> None:
-        """勾選或取消某條曲線。"""
-        chosen = set(self.plot_selected)
-        if checked:
-            chosen.add(name)
-        else:
-            chosen.discard(name)
-        self.plot_selected = self._in_display_order(chosen)
-
-    @rx.event
-    def toggle_plot_many(self, names: list[str]) -> None:
-        """整行（元件）或整組（條件）勾選：全部已勾選就全部取消，否則全部勾選。"""
-        chosen = set(self.plot_selected)
-        if set(names) <= chosen:
-            chosen -= set(names)
-        else:
-            chosen |= set(names)
-        self.plot_selected = self._in_display_order(chosen)
-
-    @rx.event
-    def select_all_plot(self) -> None:
-        """全選。"""
-        self.plot_selected = self._in_display_order(set(self.curve_names))
-
-    @rx.event
-    def select_no_plot(self) -> None:
-        """全消。"""
-        self.plot_selected = []
-
-    @rx.event
-    def toggle_hide_block(self, title: str):
-        """暫時隱藏／取消隱藏一個區塊：勾選保留，只是不畫進圖；已有預覽圖時自動重畫。"""
-        hidden = set(self.hidden_blocks)
-        hidden.symmetric_difference_update({title})
-        self.hidden_blocks = sorted(hidden)
-        if self.plot_png:
-            return DarkState.plot_dark
+    def _on_hidden_changed(self):
+        """暫時隱藏改變：已有預覽圖時自動重畫（CurvePickerMixin 的掛鉤）。"""
+        return DarkState.plot_dark if self.plot_png else None
 
     # ---------- 略過分組（二次確認） ----------
     @rx.event
@@ -502,8 +451,9 @@ class DarkState(GroupingMixin, SessionState):
 
     @rx.event
     def reset_plot_range(self) -> None:
-        """X、Y 範圍回到自動。"""
+        """X、Y 範圍回到自動（輸入框重新掛載以清空）。"""
         self.x_min = self.x_max = self.y_min = self.y_max = ""
+        self.range_key += 1
 
     def _ranges(self) -> tuple[list[float] | None, list[float] | None]:
         """檢查並取出 (X 範圍, Y 範圍)；留空為自動；格式錯誤拋出 ValueError。"""
@@ -530,12 +480,12 @@ class DarkState(GroupingMixin, SessionState):
     async def plot_dark(self):
         """畫暗電流疊圖（|J| 對數 Y 軸；有偏移時右上角註記 shift）。"""
         if not self.plot_selected:
-            self._show_message("請至少勾選一條曲線")
+            self._show_message("請至少勾選一個 pixel")
             return
         # 依目前的顯示順序排列（分組可能在勾選後才改），並排除暫時隱藏的區塊
         names = self._visible_selected()
         if not names:
-            self._show_message("勾選的曲線都在暫時隱藏的區塊內，請先取消隱藏")
+            self._show_message("勾選的 pixel 都在暫時隱藏的區塊內，請先取消隱藏")
             return
         try:
             x_range, y_range = self._ranges()

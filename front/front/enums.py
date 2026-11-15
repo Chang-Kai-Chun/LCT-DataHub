@@ -84,6 +84,13 @@ class Section(Enum):
     EQE = "eqe"
 
 
+class ProjectSort(Enum):
+    """專案大廳的排序方式。"""
+
+    UPDATED = "最新修改"
+    NAME = "名稱排序"
+
+
 class ShiftMode(Enum):
     """B-2 最低點位置處理（core.dark_current.types.ShiftMode）。"""
 
@@ -92,13 +99,21 @@ class ShiftMode(Enum):
 
 
 class DarkTab(Enum):
-    """暗電流頁面的分頁。"""
+    """暗電流頁面的步驟標籤：b-1 整合（上傳、面積、偏移、Excel）、b-2 分組、b-3 暗電流圖、b-4 擷取值（規劃中）。"""
 
-    UPLOAD = "upload"
-    SHIFT = "shift"
-    EXCEL = "excel"
+    INTEGRATE = "integrate"
     GROUPING = "grouping"
     PLOT = "plot"
+    EXTRACT = "extract"
+
+
+class EqeTab(Enum):
+    """EQE 頁面的步驟標籤：c-1 上傳（含舊型命名、Excel）、c-2 分組、c-3 EQE 與積分電流、c-4 R-plot。"""
+
+    UPLOAD = "upload"
+    GROUPING = "grouping"
+    EQE = "eqe"
+    RPLOT = "rplot"
 
 
 class Route(Enum):
@@ -106,7 +121,8 @@ class Route(Enum):
 
     HOME = "/"
     LOGIN = "/login"
-    PROJECTS = "/projects"
+    PROJECTS = "/projects"  # 專案大廳（登入後先選專案，不顯示側欄）
+    OVERVIEW = "/overview"  # 作業區第一頁：專案總覽
     JV = "/jv"
     DARK = "/dark"
     EQE = "/eqe"

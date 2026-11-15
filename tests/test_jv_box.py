@@ -16,7 +16,7 @@ from lct_datahub.core.jv.types import (
 )
 from lct_datahub.core.sample_id import parse_sample_id
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "JV_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JV_test_file"
 
 pytestmark = pytest.mark.skipif(not TEST_DIR.exists(), reason="沒有 JV_test_file")
 

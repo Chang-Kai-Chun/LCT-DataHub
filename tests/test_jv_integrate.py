@@ -17,7 +17,7 @@ from lct_datahub.core.jv.reader import list_jv_csv, read_jv_files
 from lct_datahub.core.jv.types import Direction, JVParam, TableColumn
 from lct_datahub.core.sample_id import SampleId, expand_samples
 
-TEST_DIR = Path(__file__).resolve().parent.parent / "JV_test_file"
+TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JV_test_file"
 
 pytestmark = pytest.mark.skipif(not TEST_DIR.exists(), reason="沒有 JV_test_file")
 
