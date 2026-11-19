@@ -1,4 +1,5 @@
 """B-1 暗電流整合（truncate、pdqe、mingchi、integrate、area、export）的測試。"""
+import dataclasses
 from pathlib import Path
 
 import numpy as np
@@ -40,7 +41,9 @@ from lct_datahub.core.plotting import figure_to_png, plot_dark_current
 TEST_DIR = Path(__file__).resolve().parent.parent / "test_for_develop" / "JD_test_file"
 # 檔名可能被改過，所以用內容特徵找檔：PD-QE 是 .txt，明志是 .xls
 PDQE = next(iter(TEST_DIR.glob("JD_*.txt")), TEST_DIR / "missing.txt")
-MINGCHI = next(iter(TEST_DIR.glob("*.xls")), TEST_DIR / "missing.xls")
+MINGCHI = next(iter(TEST_DIR.glob("G1 REF*_abs*.xls")), TEST_DIR / "missing.xls")
+# 2026-11-19 加入：明志 5 顆 pixel，各有 _abs（畫圖）與未取絕對值（B-4）兩個檔
+SIGNED_SAMPLES = ["G1-2", "G6-1", "G10-1", "G11-1", "G14-1"]
 needs_files = pytest.mark.skipif(not TEST_DIR.exists(), reason="沒有 JD_test_file")
 
 
@@ -157,12 +160,71 @@ def test_mingchi_real_xlsx(tmp_path):
 # ---------- 整合 ----------
 @needs_files
 def test_list_dark_files_and_integrate_both_formats():
-    """資料夾內兩種格式合併：57 + 1 條曲線。"""
+    """資料夾內兩種格式合併：PD-QE 57 條＋明志 _abs 6 條；未取絕對值的檔不算曲線。"""
     files = list_dark_files(TEST_DIR)
-    assert {f.name for f in files} == {PDQE.name, MINGCHI.name}
+    assert {PDQE.name, MINGCHI.name} <= {f.name for f in files}
+    assert all("_abs" in f.name.lower() for f in files if f.suffix == ".xls")
     curves = read_dark_files(files)
-    assert len(curves) == 58
-    assert len({c.name for c in curves}) == 58
+    assert len(curves) == 57 + 1 + len(SIGNED_SAMPLES)
+    assert len({c.name for c in curves}) == len(curves)
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [("G6-1_330 K.xls", True), ("a.xlsx", True), ("G6-1_330 K_abs.xls", False), ("~$a.xls", False), ("a.txt", False)],
+)
+def test_is_signed_file(name, expected):
+    """未取絕對值的檔：Excel、檔名沒有 _abs、不是暫存檔。"""
+    from lct_datahub.core.dark_current.integrate import accepts_upload, is_signed_file
+
+    assert is_signed_file(name) is expected
+    assert accepts_upload(name) is (expected or is_dark_file(name))
+
+
+def test_pair_key():
+    """配對鍵：去掉副檔名與 _abs，不分大小寫、空白統一。"""
+    from lct_datahub.core.dark_current.integrate import pair_key
+
+    assert pair_key("G6-1_330 K_abs.xls") == pair_key("g6-1_330  k.XLS") == "g6-1_330 k"
+    assert pair_key("G1 REF-1_330 K_abs (明志).xls") == "g1 ref-1_330 k (明志)"
+
+
+@needs_files
+def test_signed_files_attach_to_curves():
+    """未取絕對值的檔附到同名 _abs 曲線；G1 REF-1 沒有同名檔。"""
+    from lct_datahub.core.dark_current.integrate import list_signed_files, read_dark_files_with_signed
+
+    signed = list_signed_files(TEST_DIR)
+    assert len(signed) == len(SIGNED_SAMPLES)
+    curves, unpaired = read_dark_files_with_signed(list_dark_files(TEST_DIR) + signed)
+    assert unpaired == []
+    mingchi = {c.name: c for c in curves if c.instrument is Instrument.MINGCHI}
+    assert all(mingchi[f"{s}_330 K"].signed is not None for s in SIGNED_SAMPLES)
+    assert mingchi["G1 REF-1_330 K"].signed is None
+    assert all(c.signed is None for c in curves if c.instrument is Instrument.PDQE)
+
+
+def test_only_signed_files_raises(tmp_path):
+    """只有未取絕對值的檔、沒有 _abs 曲線檔：拋出 NO_CURVES。"""
+    from lct_datahub.core.dark_current.integrate import read_dark_files_with_signed
+
+    v = np.round(np.arange(-0.2, 0.3, 0.01), 2)
+    pd.DataFrame({"V": v, "I": v * 1e-6, "J": v * 1e-6 / 0.05}).to_excel(tmp_path / "S2.xlsx", index=False)
+    with pytest.raises(DarkFileError) as e:
+        read_dark_files_with_signed([tmp_path / "S2.xlsx"])
+    assert e.value.reason is DarkFailure.NO_CURVES
+
+
+def test_unpaired_signed_file_reported(tmp_path):
+    """找不到同名 _abs 曲線的未取絕對值檔：列在 unpaired，不影響曲線。"""
+    from lct_datahub.core.dark_current.integrate import read_dark_files_with_signed
+
+    v = np.round(np.arange(-0.2, 0.3, 0.01), 2)
+    frame = pd.DataFrame({"V": v, "I": v * 1e-6, "J": np.abs(v) * 1e-6 / 0.05})
+    frame.to_excel(tmp_path / "S2_abs.xlsx", index=False)
+    frame.to_excel(tmp_path / "S3.xlsx", index=False)
+    curves, unpaired = read_dark_files_with_signed([tmp_path / "S2_abs.xlsx", tmp_path / "S3.xlsx"])
+    assert [c.name for c in curves] == ["S2"] and curves[0].signed is None and unpaired == ["S3.xlsx"]
 
 
 def test_list_dark_files_filters(tmp_path):
@@ -451,3 +513,55 @@ def test_extract_matches_pdqe_summary():
     for e in extract_all(shifted):
         assert e.rsh == pytest.approx(e.reference.rs, rel=1e-3)
         assert e.reference_rsh == (e.reference.rs if e.shift else e.reference.rsh)
+
+
+# ---------- B-4：明志 _abs 檔的電流正負號（2026-11-19） ----------
+def test_restore_sign_and_absolute_detection():
+    """V 形的絕對值電流：最低點左側改為負號；有負值或最低點在端點都不算絕對值資料。"""
+    from lct_datahub.core.dark_current.extract import fit_rsh, is_absolute_current, restore_sign
+
+    v = np.round(np.arange(-0.1, 0.11, 0.01), 2)
+    true_i = (v - 0.02) / 5e8  # Rsh 5×10⁸ Ω，零點在 0.02 V
+    assert is_absolute_current(v, np.abs(true_i))
+    assert not is_absolute_current(v, true_i)  # 有負值
+    assert not is_absolute_current(v, np.abs(v + 0.2))  # 最低點在端點
+    restored = restore_sign(v, np.abs(true_i))
+    assert np.allclose(restored, true_i)
+    assert fit_rsh(v - 0.02, restored) == pytest.approx(5e8, rel=1e-6)
+
+
+def test_extract_restores_sign_for_absolute_mingchi(tmp_path):
+    """明志 _abs 檔沒有同名檔：自動還原正負號，Rsh 為正；來源標示「由絕對值還原」。"""
+    from lct_datahub.core.dark_current.extract import extract
+    from lct_datahub.core.dark_current.types import CurrentSource
+
+    v = np.round(np.arange(-0.2, 0.31, 0.01), 2)
+    i = np.abs(v / 4e8)
+    pd.DataFrame({"V": v, "I": i, "J": i / 0.045}).to_excel(tmp_path / "S9_abs.xlsx", index=False)
+    [curve] = read_dark_files([tmp_path / "S9_abs.xlsx"])
+    e = extract(curve)
+    assert e.current_source is CurrentSource.RESTORED and e.rsh == pytest.approx(4e8, rel=1e-6)
+
+
+@needs_files
+def test_extract_uses_signed_file_with_same_shift():
+    """有同名未取絕對值的檔：B-4 用它（套用相同偏移）；結果與還原正負號一致，Rsh 皆為正。"""
+    from lct_datahub.core.dark_current.extract import extract
+    from lct_datahub.core.dark_current.integrate import list_signed_files
+    from lct_datahub.core.dark_current.types import CurrentSource, ExtractBias
+
+    curves = read_dark_files(list_dark_files(TEST_DIR) + list_signed_files(TEST_DIR))
+    mingchi = {c.name: c for c in curves if c.instrument is Instrument.MINGCHI}
+    for sample in SIGNED_SAMPLES:
+        for mode in ShiftMode:
+            curve = shift_curve(mingchi[f"{sample}_330 K"], mode)
+            paired = extract(curve)
+            restored = extract(dataclasses.replace(curve, signed=None))
+            assert paired.current_source is CurrentSource.SIGNED_FILE
+            assert restored.current_source is CurrentSource.RESTORED
+            assert paired.rsh > 0 and paired.rsh == pytest.approx(restored.rsh, rel=1e-6)
+            for bias in ExtractBias:
+                assert paired.id[bias] == pytest.approx(restored.id[bias], rel=1e-6)
+    # PD-QE 檔內電流本來就有正負號
+    pdqe = next(c for c in curves if c.instrument is Instrument.PDQE)
+    assert extract(pdqe).current_source is CurrentSource.FILE

@@ -36,6 +36,14 @@ class ExtractBias(Enum):
     NEG_0_5 = -0.5
 
 
+class CurrentSource(Enum):
+    """B-4 計算 Rsh、Id 所用電流的來源（2026-11-19：明志 _abs 檔的電流也是絕對值，不能直接擬合 Rsh）。"""
+
+    FILE = "檔內電流"  # 檔案本身就有正負號（PD-QE，或明志非絕對值的檔）
+    SIGNED_FILE = "未取絕對值的同名檔"  # 明志：同名但檔名沒有 _abs 的檔
+    RESTORED = "由絕對值還原"  # 明志：找不到同名檔，以 |I| 最低點為零點還原正負號
+
+
 @dataclass(frozen=True)
 class InstrumentRef:
     """PD-QE 檔底部彙整表的對照值（B-4 只當對照與測試，2026-11-15 驗證過算法）。
@@ -83,6 +91,8 @@ class DarkCurve:
     data: pd.DataFrame  # 欄位為 DarkColumn 的 value；偏移後多一欄 ORIGINAL_VOLTAGE
     shift: float = 0.0  # 偏移量 V：Volt = 原始電壓 − shift（沒偏移為 0）
     reference: InstrumentRef | None = None  # PD-QE 彙整表的對照值（明志沒有）
+    # 明志：同名但檔名沒有 _abs 的檔（原始電壓、有正負號電流兩欄），只供 B-4 使用；沒有為 None
+    signed: pd.DataFrame | None = None
 
     @property
     def is_shifted(self) -> bool:

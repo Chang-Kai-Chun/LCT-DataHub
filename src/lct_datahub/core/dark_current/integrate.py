@@ -1,9 +1,15 @@
 """B-1：暗電流整合（偵測儀器、讀檔、名稱去重、面積檢查資料）。
 
 只負責讀取與整合；有效面積確認（check_areas）、最低點偏移（B-2）、繪圖（B-3）由呼叫端另外處理。
+
+明志 Excel（2026-11-19）：檔名有 _abs 的是暗電流曲線（畫圖用，電流與 J 都是絕對值）；
+同名但沒有 _abs 的是「未取絕對值的檔」，不加入曲線，只附在對應曲線上供 B-4 計算 Rsh 與 Id。
 """
 import dataclasses
+import re
 from pathlib import Path
+
+import pandas as pd
 
 from lct_datahub.core import naming
 from lct_datahub.core.dark_current.mingchi import (
@@ -13,29 +19,52 @@ from lct_datahub.core.dark_current.mingchi import (
     text_rows_to_array,
 )
 from lct_datahub.core.dark_current.pdqe import is_pdqe_text, parse_pdqe
-from lct_datahub.core.dark_current.types import DarkCurve, DarkFailure, DarkFileError
+from lct_datahub.core.dark_current.types import DarkColumn, DarkCurve, DarkFailure, DarkFileError
 from lct_datahub.core.excel_read import ExcelReadError, is_excel, read_excel_grid
 
 _SUFFIXES = {".txt", ".csv", ".dat", ".xlsx", ".xls"}
 _EXCEL_SUFFIXES = {".xlsx", ".xls"}
 _ENCODINGS = ("utf-8-sig", "cp950")  # 先試 utf-8，失敗改 cp950
+_SPACES = re.compile(r"\s+")
 
 
 def is_dark_file(name: str) -> bool:
-    """判斷檔名是否為可處理的暗電流檔（資料夾讀取與 API 上傳共用同一規則）。
+    """判斷檔名是否為暗電流曲線檔（畫圖用；資料夾讀取與 API 上傳共用同一規則）。
 
     支援 txt、csv、dat、xlsx、xls；Excel 副檔名的檔名必須含 '_abs'（明志）；Office 暫存檔（~$）不算。
     """
     suffix = Path(name).suffix.lower()
     if suffix not in _SUFFIXES or name.startswith("~$"):
         return False
-    # Excel 檔名沒有 _abs 的不讀取
+    # Excel 檔名沒有 _abs 的不是曲線檔（可能是未取絕對值的檔，見 is_signed_file）
     return suffix not in _EXCEL_SUFFIXES or ABS_MARK in name.lower()
 
 
+def is_signed_file(name: str) -> bool:
+    """判斷檔名是否為明志「未取絕對值的檔」：Excel 副檔名、檔名沒有 _abs、不是 Office 暫存檔。"""
+    suffix = Path(name).suffix.lower()
+    return suffix in _EXCEL_SUFFIXES and not name.startswith("~$") and ABS_MARK not in name.lower()
+
+
+def accepts_upload(name: str) -> bool:
+    """API 上傳接受的檔案：暗電流曲線檔或未取絕對值的檔。"""
+    return is_dark_file(name) or is_signed_file(name)
+
+
 def list_dark_files(folder: Path) -> list[Path]:
-    """列出資料夾內可處理的暗電流檔（規則見 is_dark_file），依檔名排序。"""
+    """列出資料夾內可處理的暗電流曲線檔（規則見 is_dark_file），依檔名排序。"""
     return sorted(p for p in Path(folder).iterdir() if is_dark_file(p.name))
+
+
+def list_signed_files(folder: Path) -> list[Path]:
+    """列出資料夾內明志未取絕對值的檔（規則見 is_signed_file），依檔名排序。"""
+    return sorted(p for p in Path(folder).iterdir() if is_signed_file(p.name))
+
+
+def pair_key(name: str) -> str:
+    """配對用的鍵：檔名去掉副檔名與 '_abs'，不分大小寫、空白統一（G6-1_330 K_abs.xls ↔ G6-1_330 K.xls）。"""
+    stem = re.sub(ABS_MARK, "", Path(name).stem, flags=re.IGNORECASE)
+    return _SPACES.sub(" ", stem).strip().lower()
 
 
 def _read_text(path: Path) -> str:
@@ -84,12 +113,47 @@ def unique_names(curves: list[DarkCurve]) -> list[DarkCurve]:
     return [c if n == c.name else dataclasses.replace(c, name=n) for c, n in zip(curves, names)]
 
 
-def read_dark_files(paths: list[Path]) -> list[DarkCurve]:
-    """讀取多個暗電流檔並整合成一份曲線清單（依檔案順序、檔內順序；同名自動編號）。"""
+def attach_signed(curves: list[DarkCurve], signed_paths: list[Path]) -> tuple[list[DarkCurve], list[str]]:
+    """把未取絕對值的檔附到同名曲線（依 pair_key 比對來源檔名）；回傳 (曲線, 找不到對應曲線的檔名)。"""
+    signed: dict[str, pd.DataFrame] = {}
+    names: dict[str, str] = {}
+    for p in signed_paths:
+        [curve] = read_dark_file(p)  # 明志 Excel 一個檔一條曲線
+        columns = [DarkColumn.VOLTAGE.value, DarkColumn.CURRENT.value]
+        signed[pair_key(p.name)] = curve.data[columns].reset_index(drop=True)
+        names[pair_key(p.name)] = p.name
+    used: set[str] = set()
+    result = []
+    for c in curves:
+        key = pair_key(c.source)
+        if key in signed:
+            used.add(key)
+            c = dataclasses.replace(c, signed=signed[key])
+        result.append(c)
+    return result, [names[k] for k in signed if k not in used]
+
+
+def read_dark_files_with_signed(paths: list[Path]) -> tuple[list[DarkCurve], list[str]]:
+    """讀取多個檔：曲線檔整合成曲線清單（同名自動編號），未取絕對值的檔附到同名曲線。
+
+    回傳 (曲線, 找不到對應曲線的未取絕對值檔名)。只有未取絕對值的檔、沒有曲線檔時拋出 NO_CURVES。
+    """
+    paths = [Path(p) for p in paths]
+    signed_paths = [p for p in paths if is_signed_file(p.name)]
+    curve_paths = [p for p in paths if p not in signed_paths]
+    if signed_paths and not curve_paths:
+        raise DarkFileError(
+            signed_paths[0].name, DarkFailure.NO_CURVES, "檔名含 _abs 的暗電流檔", "只有未取絕對值的檔",
+        )
     curves: list[DarkCurve] = []
-    for p in paths:
+    for p in curve_paths:
         curves.extend(read_dark_file(p))
-    return unique_names(curves)
+    return attach_signed(unique_names(curves), signed_paths)
+
+
+def read_dark_files(paths: list[Path]) -> list[DarkCurve]:
+    """讀取多個暗電流檔並整合成一份曲線清單（依檔案順序、檔內順序；同名自動編號；未取絕對值的檔附到同名曲線）。"""
+    return read_dark_files_with_signed(paths)[0]
 
 
 def dark_areas(curves: list[DarkCurve]) -> dict[str, list[float]]:

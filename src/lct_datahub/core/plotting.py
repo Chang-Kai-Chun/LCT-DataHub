@@ -16,6 +16,8 @@ from lct_datahub.core.dark_current.types import DarkColumn, DarkCurve
 from lct_datahub.core.eqe.types import EqeColumn, EqeCurve
 from lct_datahub.core.jv.curve import DEFAULT_Y_RANGE, CurveLine
 from lct_datahub.core.jv.types import JVParam
+from lct_datahub.core.noise.reference import ReferenceKind, ReferenceLine
+from lct_datahub.core.noise.types import NoiseGroup
 
 # 預設色盤（F 區色票庫完成前暫用）；matplotlib 的 tab10
 DEFAULT_COLORS = (
@@ -368,6 +370,61 @@ def plot_rplot(
     else:
         ax.set_ylim(bottom=0)
     if curves:
+        h, l = ax.get_legend_handles_labels()
+        _legend_outside(ax, h, l, 1.02)
+    return fig
+
+
+NOISE_BAND_ALPHA = 0.18  # n ≥ 2 時最小～最大範圍帶的不透明度
+REFERENCE_STYLES = {  # 參考線線型（Shot、Thermal、總和）
+    ReferenceKind.SHOT: "--",
+    ReferenceKind.THERMAL: ":",
+    ReferenceKind.TOTAL: "-.",
+}
+
+
+@_styled
+def plot_noise(
+    groups: list[NoiseGroup],
+    references: list[ReferenceLine] | None = None,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    show_band: bool = True,
+    colors: tuple[str, ...] = DEFAULT_COLORS,
+) -> Figure:
+    """D-2：雜訊密度雙對數圖；每組畫 n 次平均，n ≥ 2 時加最小～最大範圍帶（show_band）。
+
+    references 為選用的 Shot／Thermal 參考線（水平線，同樣品同色、依種類換線型）。
+    全部被排除（n = 0）的組不畫。x_range、y_range 為 (下限, 上限)，None 為自動；兩軸皆為對數，下限需大於 0。
+    """
+    for name, rng in (("X", x_range), ("Y", y_range)):
+        _check_range(name, rng)
+        if rng is not None and rng[0] <= 0:
+            raise ValueError(f"{name} 軸為對數座標，下限必須大於 0")
+
+    fig, ax = _new_figure((6, 4.5))
+    color_of: dict[str, str] = {}
+    drawn = [g for g in groups if g.mean is not None]
+    for i, group in enumerate(drawn):
+        color = colors[i % len(colors)]
+        color_of.setdefault(group.sample, color)
+        ax.plot(group.freq, group.mean, color=color, linewidth=1.0, label=group.label)
+        if show_band and group.n >= 2:
+            ax.fill_between(group.freq, group.low, group.high, color=color, alpha=NOISE_BAND_ALPHA, linewidth=0)
+    for line in references or []:
+        ax.axhline(
+            line.value, color=color_of.get(line.sample, "black"), linestyle=REFERENCE_STYLES[line.kind],
+            linewidth=1.2, label=line.label,
+        )
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel("Frequency (Hz)")
+    ax.set_ylabel("Noise current (A/Hz$^{0.5}$)")
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if y_range is not None:
+        ax.set_ylim(*y_range)
+    if drawn or references:
         h, l = ax.get_legend_handles_labels()
         _legend_outside(ax, h, l, 1.02)
     return fig

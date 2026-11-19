@@ -5,16 +5,23 @@
 - 一律使用曲線目前的電壓欄：曲線有偏移（B-2）時就是偏移後的電壓（0 V 即 |J| 最低點）
 - PD-QE 與明志相同做法；PD-QE 另附儀器彙整表的值只當對照
   （未偏移時自己算的 Rsh＝表上 Rsh，偏移後＝表上 Rs）
+- 明志 _abs 檔的電流也是絕對值（2026-11-19 發現），直接擬合 Rsh 會得到負值；改用有正負號的電流：
+  1. 有同名但沒有 _abs 的檔 → 用它（套用與曲線相同的 B-2 偏移量）
+  2. 沒有 → 以 |I| 最低點為零點，左側（電壓較低）改為負號
 """
 from dataclasses import dataclass, field
 
 import numpy as np
 import pandas as pd
 
-from lct_datahub.core.dark_current.types import DarkColumn, DarkCurve, ExtractBias, Instrument, InstrumentRef
+from lct_datahub.core.dark_current.shift import original_voltage
+from lct_datahub.core.dark_current.types import (
+    CurrentSource, DarkColumn, DarkCurve, ExtractBias, Instrument, InstrumentRef,
+)
 
 RSH_WINDOW = 0.03  # Rsh 擬合區間半寬（V）：−0.03～0.03 V
 _EPS = 1e-9  # 浮點誤差容許（電壓 0.03 可能存成 0.030000000000000002）
+_DECIMALS = 9  # 套用偏移後四捨五入的位數（與 shift.py 相同）
 
 
 @dataclass(frozen=True)
@@ -29,6 +36,7 @@ class DarkExtract:
     jd: dict[ExtractBias, float | None] = field(default_factory=dict)  # A/cm²；電壓超出量測範圍為 None
     id: dict[ExtractBias, float | None] = field(default_factory=dict)  # A
     reference: InstrumentRef | None = None  # PD-QE 儀器對照值
+    current_source: CurrentSource = CurrentSource.FILE  # Rsh、Id 所用電流的來源
 
     @property
     def rsh_area(self) -> float | None:
@@ -62,10 +70,37 @@ def current_at(volt: np.ndarray, current: np.ndarray, target: float) -> float | 
     return float(np.interp(target, v, i))
 
 
-def extract(curve: DarkCurve) -> DarkExtract:
-    """算出一條曲線的 Rsh 與三個電壓的暗電流（使用目前的電壓欄，偏移後即偏移後的電壓）。"""
+def is_absolute_current(original: np.ndarray, current: np.ndarray) -> bool:
+    """電流是否為取過絕對值的資料：全部 ≥ 0，且 |I| 最低點兩側都有量測點（V 形）。"""
+    if len(current) < 3 or np.any(current < 0):
+        return False
+    lowest = int(np.argmin(np.abs(current)))
+    return bool(np.any(original < original[lowest]) and np.any(original > original[lowest]))
+
+
+def restore_sign(original: np.ndarray, current: np.ndarray) -> np.ndarray:
+    """以 |I| 最低點為零點還原正負號：電壓低於該點的電流改為負值，其餘維持正值。"""
+    zero = original[int(np.argmin(np.abs(current)))]
+    return np.where(original < zero, -np.abs(current), np.abs(current))
+
+
+def signed_iv(curve: DarkCurve) -> tuple[np.ndarray, np.ndarray, CurrentSource]:
+    """B-4 使用的 (電壓, 有正負號電流, 來源)；電壓已套用曲線目前的 B-2 偏移。"""
+    if curve.signed is not None:
+        # 未取絕對值的同名檔：套用與曲線相同的偏移量
+        volt = np.round(curve.signed[DarkColumn.VOLTAGE.value].to_numpy(float) - curve.shift, _DECIMALS)
+        return volt, curve.signed[DarkColumn.CURRENT.value].to_numpy(float), CurrentSource.SIGNED_FILE
     volt = curve.data[DarkColumn.VOLTAGE.value].to_numpy(float)
     current = curve.data[DarkColumn.CURRENT.value].to_numpy(float)
+    original = original_voltage(curve).astype(float)
+    if curve.instrument is Instrument.MINGCHI and is_absolute_current(original, current):
+        return volt, restore_sign(original, current), CurrentSource.RESTORED
+    return volt, current, CurrentSource.FILE
+
+
+def extract(curve: DarkCurve) -> DarkExtract:
+    """算出一條曲線的 Rsh 與三個電壓的暗電流（使用目前的電壓欄，偏移後即偏移後的電壓；電流來源見 signed_iv）。"""
+    volt, current, source = signed_iv(curve)
     ids: dict[ExtractBias, float | None] = {}
     jds: dict[ExtractBias, float | None] = {}
     for bias in ExtractBias:
@@ -74,7 +109,7 @@ def extract(curve: DarkCurve) -> DarkExtract:
         jds[bias] = abs(value) / curve.area if value is not None else None
     return DarkExtract(
         name=curve.name, instrument=curve.instrument, area=curve.area, shift=curve.shift,
-        rsh=fit_rsh(volt, current), jd=jds, id=ids, reference=curve.reference,
+        rsh=fit_rsh(volt, current), jd=jds, id=ids, reference=curve.reference, current_source=source,
     )
 
 
@@ -104,5 +139,6 @@ def extract_frame(extracts: list[DarkExtract]) -> pd.DataFrame:
         for bias in ExtractBias:
             row[f"Id @ {bias_label(bias)} (A)"] = e.id.get(bias)
         row["Instrument Rsh (ohm)"] = e.reference_rsh  # 未偏移＝表上 Rsh、偏移後＝表上 Rs
+        row["Current source"] = e.current_source.value  # Rsh、Id 所用電流的來源
         rows.append(row)
     return pd.DataFrame(rows)

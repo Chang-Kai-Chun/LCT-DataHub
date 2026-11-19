@@ -140,12 +140,14 @@ def test_dark_flow(client):
     job = _upload(client, "dark", _files(JD_DIR)).json()
     url = f"/api/dark/jobs/{job['job_id']}"
     # PD-QE 檔內 4.5 mm²；明志由 |I|/J 反推也是 0.045 cm²，所以一致
-    assert len(job["curves"]) == 58 and job["area_report"]["uniform_value"] == 0.045
+    # 曲線：PD-QE 57＋明志 _abs 6；明志未取絕對值的 5 個檔只供 B-4，不算曲線
+    assert len(job["curves"]) == 63 and job["area_report"]["uniform_value"] == 0.045
+    assert job["skipped"] == [] and job["unpaired_signed"] == []
     assert job["settings"] == {"area": None, "shift_mode": "保持原始", "area_confirmed": False, "conditions": None, "extract_bias": 0.0}
     assert not any(c["is_shifted"] for c in job["curves"])
 
     shifted = client.put(f"{url}/settings", json={"shift_mode": "偏移到 0 V", "area": 0.05}).json()
-    assert sum(c["is_shifted"] for c in shifted["curves"]) == 40
+    assert sum(c["is_shifted"] for c in shifted["curves"]) == 45  # PD-QE 39＋明志 6（最低點皆不在 0 V）
     assert shifted["settings"]["area_confirmed"]
     assert {c["area"] for c in shifted["curves"]} == {0.05}
     assert client.put(f"{url}/settings", json={"area": 0}).status_code == 400
@@ -165,9 +167,14 @@ def test_dark_extract(client):
     job = _upload(client, "dark", _files(JD_DIR)).json()
     url = f"/api/dark/jobs/{job['job_id']}"
     ext = client.get(f"{url}/extract").json()
-    assert ext["bias"] == 0.0 and ext["biases"] == [0.0, -0.1, -0.5] and len(ext["rows"]) == 58
+    assert ext["bias"] == 0.0 and ext["biases"] == [0.0, -0.1, -0.5] and len(ext["rows"]) == 63
     row = next(r for r in ext["rows"] if r["name"] == "G1-3")
     assert row["rsh"] == pytest.approx(row["reference_rsh"], rel=1e-3) and set(row["jd"]) == {"0", "-0.1", "-0.5"}
+    assert row["current_source"] == "檔內電流"
+    # 明志：有同名未取絕對值檔的用它；G1 REF-1 沒有，由絕對值還原；Rsh 都是正值
+    sources = {r["name"]: r["current_source"] for r in ext["rows"]}
+    assert sources["G6-1_330 K"] == "未取絕對值的同名檔" and sources["G1 REF-1_330 K"] == "由絕對值還原"
+    assert all(r["rsh"] > 0 for r in ext["rows"] if r["instrument"] == "明志")
     client.put(f"{url}/settings", json={"shift_mode": "偏移到 0 V"})
     shifted = {r["name"]: r for r in client.get(f"{url}/extract").json()["rows"]}
     assert shifted["G14-2"]["rsh"] == pytest.approx(4.851e7, rel=1e-3)  # 儀器 Rs 欄
@@ -203,16 +210,24 @@ def test_dark_grouping(client):
 
 
 @needs(JD_DIR)
-def test_dark_upload_skips_excel_without_abs(client):
-    """上傳時 Excel 檔名沒有 _abs 的略過（列在 skipped），其餘照常讀取。"""
+def test_dark_upload_skips_unsupported(client):
+    """上傳時不支援的檔（暫存檔、其他副檔名）略過並列在 skipped，其餘照常讀取。"""
     txt = next(p for p in JD_DIR.iterdir() if p.suffix == ".txt")
-    files = [("files", (txt.name, txt.read_bytes())), ("files", ("no_mark.xlsx", b"x")), ("files", ("~$t_abs.xlsx", b"x"))]
+    files = [("files", (txt.name, txt.read_bytes())), ("files", ("photo.jpg", b"x")), ("files", ("~$t_abs.xlsx", b"x"))]
     job = client.post("/api/dark/jobs", files=files, params=UPLOAD_PARAMS).json()
-    assert job["skipped"] == ["no_mark.xlsx", "~$t_abs.xlsx"]
+    assert job["skipped"] == ["photo.jpg", "~$t_abs.xlsx"]
     assert {c["source"] for c in job["curves"]} == {txt.name}
     # 只有不符合規則的檔案：400
-    res = client.post("/api/dark/jobs", files=[("files", ("no_mark.xls", b"x"))], params=UPLOAD_PARAMS)
+    res = client.post("/api/dark/jobs", files=[("files", ("photo.jpg", b"x"))], params=UPLOAD_PARAMS)
     assert res.status_code == 400 and res.json()["kind"] == "input"
+
+
+@needs(JD_DIR)
+def test_dark_upload_only_signed_files(client):
+    """只上傳明志未取絕對值的檔（沒有 _abs 曲線檔）：檔案錯誤 422。"""
+    signed = next(p for p in JD_DIR.iterdir() if p.suffix == ".xls" and "_abs" not in p.name)
+    res = client.post("/api/dark/jobs", files=[("files", (signed.name, signed.read_bytes()))], params=UPLOAD_PARAMS)
+    assert res.status_code == 422
 
 
 # ---------- A JV ----------

@@ -20,7 +20,7 @@ from lct_datahub.api.jobs import Job, JobStore, Section
 from lct_datahub.core.area_check import check_areas
 from lct_datahub.core.dark_current.area import AREA_OVERRIDE_NOTICE, apply_dark_area
 from lct_datahub.core.dark_current.export import write_dark_excels
-from lct_datahub.core.dark_current.integrate import dark_areas, is_dark_file, read_dark_files
+from lct_datahub.core.dark_current.integrate import accepts_upload, dark_areas, read_dark_files_with_signed
 from lct_datahub.core.dark_current.select import device_list, device_of, select_dark_curves
 from lct_datahub.core.dark_current.shift import shift_curves
 from lct_datahub.core.dark_current.extract import extract_all
@@ -72,6 +72,7 @@ class DarkJobOut(BaseModel):
 
     job_id: str
     skipped: list[str] = []
+    unpaired_signed: list[str] = []  # 明志未取絕對值的檔中，找不到同名 _abs 曲線的檔名（未使用）
     settings: DarkSettings
     area_report: AreaReportOut  # 依檔內（原始）面積檢查
     area_notice: str = AREA_OVERRIDE_NOTICE  # 改用指定面積前要給使用者看的警告
@@ -93,6 +94,7 @@ class ExtractRowOut(BaseModel):
     jd: dict[str, float | None]  # A/cm²
     id: dict[str, float | None]  # A
     reference_rsh: float | None  # PD-QE 儀器對照（未偏移＝表上 Rsh、偏移後＝表上 Rs）
+    current_source: str  # Rsh、Id 所用電流的來源（檔內電流／未取絕對值的同名檔／由絕對值還原）
 
 
 class ExtractOut(BaseModel):
@@ -119,9 +121,15 @@ class DarkPlotIn(BaseModel):
 
 # ---------- 同步工作（在執行緒中執行） ----------
 @lru_cache(maxsize=32)
+def _read_all(paths: tuple[Path, ...]) -> tuple[tuple[DarkCurve, ...], tuple[str, ...]]:
+    """讀原始檔（快取：原始檔上傳後不會再變）；回傳 (曲線, 找不到對應曲線的未取絕對值檔名)。"""
+    curves, unpaired = read_dark_files_with_signed(list(paths))
+    return tuple(curves), tuple(unpaired)
+
+
 def _read_raw(paths: tuple[Path, ...]) -> tuple[DarkCurve, ...]:
-    """讀原始檔（快取：原始檔上傳後不會再變）。"""
-    return tuple(read_dark_files(list(paths)))
+    """原始曲線（未取絕對值的檔已附到同名曲線）。"""
+    return _read_all(paths)[0]
 
 
 def _state(store: JobStore, job: Job) -> tuple[list[DarkCurve], DarkSettings, list[DarkCurve]]:
@@ -138,6 +146,7 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Dar
     return DarkJobOut(
         job_id=job.id,
         skipped=skipped or [],
+        unpaired_signed=list(_read_all(tuple(job.raw_files()))[1]),
         settings=settings,
         area_report=AreaReportOut.from_report(check_areas(dark_areas(raw))),
         devices=[str(d) for d in device_list(curves)],
@@ -154,8 +163,8 @@ def _job_out(store: JobStore, job: Job, skipped: list[str] | None = None) -> Dar
 
 
 def _create(store: JobStore, uploads: list[tuple[str, bytes]], project: Project) -> DarkJobOut:
-    """在專案中建立工作並讀檔（取代專案原本的 B 區工作）；Excel 檔名沒有 _abs 的略過（is_dark_file）。"""
-    result = store.create(SECTION, uploads, project, accept=is_dark_file)
+    """在專案中建立工作並讀檔（取代專案原本的 B 區工作）；明志 Excel 沒有 _abs 的作為未取絕對值的檔（只供 B-4）。"""
+    result = store.create(SECTION, uploads, project, accept=accepts_upload)
     return _job_out(store, result.job, result.skipped)
 
 
@@ -209,7 +218,7 @@ def _extract(store: JobStore, job_id: str) -> ExtractOut:
             name=e.name, device=_device_text(e.name), instrument=e.instrument.value, shift=e.shift, area=e.area,
             rsh=e.rsh, rsh_area=e.rsh_area,
             jd={_bias_key(b): v for b, v in e.jd.items()}, id={_bias_key(b): v for b, v in e.id.items()},
-            reference_rsh=e.reference_rsh,
+            reference_rsh=e.reference_rsh, current_source=e.current_source.value,
         )
         for e in extract_all(curves)
     ]
