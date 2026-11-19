@@ -37,6 +37,7 @@ class DarkExtract:
     id: dict[ExtractBias, float | None] = field(default_factory=dict)  # A
     reference: InstrumentRef | None = None  # PD-QE 儀器對照值
     current_source: CurrentSource = CurrentSource.FILE  # Rsh、Id 所用電流的來源
+    id_min: float | None = None  # 曲線最低點的 |I|（A）：E 區 0 V 的 Shot 使用（2026-11-19），與偏移設定無關
 
     @property
     def rsh_area(self) -> float | None:
@@ -110,6 +111,7 @@ def extract(curve: DarkCurve) -> DarkExtract:
     return DarkExtract(
         name=curve.name, instrument=curve.instrument, area=curve.area, shift=curve.shift,
         rsh=fit_rsh(volt, current), jd=jds, id=ids, reference=curve.reference, current_source=source,
+        id_min=float(np.min(np.abs(current))) if len(current) else None,
     )
 
 

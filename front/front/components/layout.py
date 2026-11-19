@@ -31,11 +31,11 @@ NAV_GROUPS: tuple[tuple[NavItem, ...], ...] = (
         NavItem("JV", Route.JV, "a."),
         NavItem("暗電流", Route.DARK, "b."),
         NavItem("EQE", Route.EQE, "c."),
-        NavItem("Noise", None, "d."),
+        NavItem("Noise", Route.NOISE, "d."),
     ),
     (
-        NavItem("PD 數據整合", None, "e."),
-        NavItem("報告輸出", None, "g."),
+        NavItem("PD 數據整合", Route.INTEGRATION, "e."),
+        NavItem("報告輸出", Route.REPORT, "g."),
     ),
     (NavItem("色票", None, "f.", note="個人"),),
 )
@@ -103,6 +103,11 @@ def page_head(title: str, letter: str = "", meta: rx.Component | None = None) ->
     if meta is not None:
         parts.append(rx.el.span(meta, class_name="meta"))
     return rx.el.header(*parts, class_name="page-head")
+
+
+def page_top(*children: rx.Component) -> rx.Component:
+    """頁首區塊（大標＋步驟標籤）：所有分頁大小、位置相同，捲動時固定在上方（2026-11-19）。"""
+    return rx.el.div(*children, class_name="page-top")
 
 
 def layout(*children: rx.Component, wide: bool = False, lock=False) -> rx.Component:

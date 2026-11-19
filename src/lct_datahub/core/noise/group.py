@@ -4,6 +4,8 @@
 - 組內有幾個檔，n 就是幾；沒有次數標記的檔一樣算一次（例如 PD-QE 只量一次）
 - 溢位、削平的檔自動排除並記錄原因，n 跟著減少
 - 未穩定的檔預設只警告、仍納入平均（2026-11-19 改：衰減主要影響 0.5 Hz 以下，D* 用的 1 Hz 幾乎不受影響）
+- 一致性：n 次量測的白雜訊底線相差超過 FLOOR_RATIO_LIMIT 倍時警告（量測狀態可能改變，例如干擾變大、換檔位），
+  仍納入平均並照常畫圖（2026-11-19，barney B1-5 −0.1 V：1.2E-12 與 4E-11 混在同一組）
 """
 import re
 from collections import Counter
@@ -11,13 +13,14 @@ from collections import Counter
 import numpy as np
 
 from lct_datahub.core.noise.anomaly import detect_anomaly
-from lct_datahub.core.noise.spectrum import noise_density
+from lct_datahub.core.noise.spectrum import floor_level, noise_density
 from lct_datahub.core.noise.types import (
     BiasSource, Exclusion, NoiseAnomaly, NoiseDefinition, NoiseGroup, NoiseRecord,
 )
 
 _DIGITS = re.compile(r"(\d+)")
 _INTERVAL_DECIMALS = 9  # 比較取樣間隔時四捨五入的位數
+FLOOR_RATIO_LIMIT = 5.0  # n 次量測底線相差超過這個倍數就警告
 
 
 def _natural_key(text: str) -> list:
@@ -70,6 +73,13 @@ def _build(records: list[NoiseRecord], definition: NoiseDefinition, exclude_unst
         freq, density = noise_density(record, definition)
         members.append(record)
         runs.append(density)
+    # 一致性用標準定義估計底線（儀器定義會把白雜訊畫斜，底線不準）
+    floors = [floor_level(*noise_density(r, NoiseDefinition.STANDARD)) for r in members]
+    if len(floors) >= 2 and min(floors) > 0 and max(floors) / min(floors) > FLOOR_RATIO_LIMIT:
+        detail = "、".join(f"{r.source} {v:.1e}" for r, v in zip(members, floors))
+        notes.append(
+            f"{len(floors)} 次量測的雜訊底線相差 {max(floors) / min(floors):.0f} 倍，量測狀態可能改變（{detail}）"
+        )
     if split:
         notes.append(f"同一樣品與偏壓有不同的量測設定，已分開計算（本組每次 {first.duration:g} s）")
     if not members:
@@ -77,7 +87,7 @@ def _build(records: list[NoiseRecord], definition: NoiseDefinition, exclude_unst
     return NoiseGroup(
         sample=first.sample, bias=first.bias, bias_source=first.bias_source, instrument=first.instrument,
         definition=definition, points=first.points, interval=first.interval, members=members,
-        excluded=excluded, freq=freq, runs=runs, notes=notes, split=split,
+        excluded=excluded, freq=freq, runs=runs, notes=notes, split=split, floors=floors,
     )
 
 

@@ -12,11 +12,14 @@ from lct_datahub.api.common import get_store
 from lct_datahub.api.grouping import GroupingIn, GroupingOut, preview_grouping
 from lct_datahub.api.jobs import JobStore, Section
 from lct_datahub.api.projects import ConditionEdit, Project, ProjectGroup
-from lct_datahub.api.routes import dark, eqe, jv
+from lct_datahub.api.routes import dark, eqe, jv, noise
 from lct_datahub.core.sample_id import parse_sample_id
 
 # 各區取得工作樣品的函式（專案總覽分組的樣品清單＝各區樣品的聯集）
-SECTION_SAMPLES = {Section.JV: jv.job_samples, Section.DARK: dark.job_samples, Section.EQE: eqe.job_samples}
+SECTION_SAMPLES = {
+    Section.JV: jv.job_samples, Section.DARK: dark.job_samples, Section.EQE: eqe.job_samples,
+    Section.NOISE: noise.job_samples,
+}
 
 router = APIRouter(prefix="/api/users", tags=["G 使用者與專案"])
 

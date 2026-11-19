@@ -82,6 +82,49 @@ class Section(Enum):
     JV = "jv"
     DARK = "dark"
     EQE = "eqe"
+    NOISE = "noise"
+
+
+class NoiseDefinition(Enum):
+    """雜訊密度的換算定義（core.noise.types.NoiseDefinition）。"""
+
+    STANDARD = "標準"  # a ÷ √(2 × 1.5 × Δf)（預設）
+    INSTRUMENT = "儀器"  # a ÷ √f（光焱軟體，只供對照）
+
+
+class NoiseTab(Enum):
+    """Noise 頁面的步驟標籤：d-1 上傳、d-2 分組、d-3 雜訊圖、d-4 數值與參考線。"""
+
+    UPLOAD = "upload"
+    GROUPING = "grouping"
+    PLOT = "plot"
+    VALUES = "values"
+
+
+class IntegrationTab(Enum):
+    """PD 數據整合頁面的步驟標籤：e-1 設定、e-2 配對、e-3 D* 表、e-4 D*(λ) 圖。"""
+
+    SETTINGS = "settings"
+    PAIRING = "pairing"
+    TABLE = "table"
+    PLOT = "plot"
+
+
+class DStarKind(Enum):
+    """D* 的四種雜訊來源（core.detectivity.compute.DStarKind）。"""
+
+    MEASURED = "Measured"
+    COMBINE = "Shot+Thermal"
+    THERMAL = "Thermal"
+    SHOT = "Shot"
+
+
+class SourceKind(Enum):
+    """E 區配對的資料來源（core.detectivity.pairing.SourceKind）。"""
+
+    DARK = "dark"
+    EQE = "eqe"
+    NOISE = "noise"
 
 
 class ProjectSort(Enum):
@@ -126,3 +169,6 @@ class Route(Enum):
     JV = "/jv"
     DARK = "/dark"
     EQE = "/eqe"
+    NOISE = "/noise"
+    INTEGRATION = "/integration"
+    REPORT = "/report"

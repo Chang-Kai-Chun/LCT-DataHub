@@ -9,7 +9,7 @@
 import reflex as rx
 
 # 匯入頁面模組時，@rx.page 會自動註冊頁面
-from front.pages import dark, eqe, jv, login, overview, projects  # noqa: F401
+from front.pages import dark, eqe, integration, jv, login, noise, overview, projects, report  # noqa: F401
 
 # 字體（皆為 SIL OFL 1.1）：Sora（英數字標、大標）、JetBrains Mono（數值）、
 # 中文為源流明體 GenRyuMin（https://github.com/ButTaiwan/genryu-font，需安裝在電腦上），

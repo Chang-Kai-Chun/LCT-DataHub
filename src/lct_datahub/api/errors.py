@@ -14,6 +14,7 @@ from lct_datahub.api.projects import InvalidNameError, WorkspaceNotFoundError
 from lct_datahub.core.dark_current.types import DarkFileError
 from lct_datahub.core.eqe.types import EqeFileError, EqeNameError
 from lct_datahub.core.jv.types import GroupingError, InvalidAreaError, JVFileError
+from lct_datahub.core.noise.types import NoiseFileError
 from lct_datahub.core.sample_id import InvalidSampleIdError
 
 
@@ -26,7 +27,7 @@ class ErrorKind(Enum):
 
 
 # 檔案錯誤都有 filename、reason（Enum）、expected、actual 四個屬性
-FILE_ERRORS = (JVFileError, DarkFileError, EqeFileError)
+FILE_ERRORS = (JVFileError, DarkFileError, EqeFileError, NoiseFileError)
 INPUT_ERRORS = (
     GroupingError, InvalidAreaError, InvalidSampleIdError, EqeNameError, UploadError, InvalidNameError,
     KeyError, ValueError,

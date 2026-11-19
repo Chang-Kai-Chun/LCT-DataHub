@@ -25,7 +25,7 @@ from lct_datahub.core.eqe.integrate import read_eqe_files, rename_curves
 from lct_datahub.core.eqe.select import select_eqe_curves
 from lct_datahub.core.eqe.types import EqeCurve, EqeInstrument
 from lct_datahub.core.jv.types import GroupingError
-from lct_datahub.core.plotting import DEFAULT_EQE_RANGE, plot_eqe, plot_rplot
+from lct_datahub.core.plotting import DEFAULT_EQE_RANGE, DEFAULT_JSC_RANGE, DEFAULT_RPLOT_RANGE, plot_eqe, plot_rplot
 from lct_datahub.core.sample_id import SampleId, device_of, devices_of
 
 SECTION = Section.EQE
@@ -78,16 +78,16 @@ class EqePlotIn(BaseModel):
     names: list[str]
     x_range: AxisRange = None
     eqe_range: AxisRange = DEFAULT_EQE_RANGE
-    jsc_range: AxisRange = None
+    jsc_range: AxisRange = DEFAULT_JSC_RANGE  # 預設 0–32.5（2026-11-19）
     show_jsc: bool = True
 
 
 class RplotIn(BaseModel):
-    """C-3 R-plot 參數。"""
+    """C-3 R-plot 參數：Y 軸預設 0–0.6 A/W（2026-11-19）。"""
 
     names: list[str]
     x_range: AxisRange = None
-    y_range: AxisRange = None
+    y_range: AxisRange = DEFAULT_RPLOT_RANGE
 
 
 # ---------- 同步工作（在執行緒中執行） ----------
@@ -263,3 +263,12 @@ def job_samples(store: JobStore, job: Job) -> list[str]:
     """工作中的樣品（給專案總覽分組；C 區樣品＝改名後名稱開頭代號）。"""
     _, _, curves = _curves(store, job)
     return [str(d) for d in _devices(curves)]
+
+
+def project_curves(store: JobStore, project: Project) -> list[EqeCurve]:
+    """專案目前 C 區工作的 EQE 曲線（套用改名）；專案沒有 C 區工作時為空清單（E 區使用）。"""
+    job_id = project.info.jobs.get(SECTION.value)
+    if not job_id:
+        return []
+    _, _, curves = _curves(store, store.get(SECTION, job_id))
+    return curves

@@ -73,6 +73,8 @@ def summary_frame(groups: list[NoiseGroup]) -> pd.DataFrame:
             "Instrument": g.instrument.value,
             "n": g.n,
             f"Noise @ {TARGET_FREQUENCY:g} Hz (A/Hz^0.5)": value_at(g.freq, g.mean) if g.mean is not None else None,
+            "Peak |I| (A)": g.peak_current,
+            "Floor ratio": g.floor_ratio,
             "Definition": _DEFINITION_TEXT[g.definition],
             "Window": "Hann",
             "df (Hz)": 1.0 / g.duration,

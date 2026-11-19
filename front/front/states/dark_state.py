@@ -61,6 +61,11 @@ class ExtractRow:
     jd_0: str = ""
     jd_01: str = ""
     jd_05: str = ""
+    current_source: str = ""  # Rsh、Id 所用電流的來源（檔內電流／未取絕對值的同名檔／由絕對值還原）
+    restored: bool = False  # 由絕對值還原（提醒使用者）
+
+
+RESTORED_SOURCE = "由絕對值還原"  # core.dark_current.types.CurrentSource.RESTORED 的 value
 
 
 def _sci(value) -> str:
@@ -409,6 +414,7 @@ class DarkState(CurvePickerMixin, GroupingMixin, SessionState):
                 rsh=_sci(r["rsh"]), reference_rsh="" if r["reference_rsh"] is None else _sci(r["reference_rsh"]),
                 rsh_area=_sci(r["rsh_area"]),
                 jd_0=_sci(r["jd"].get("0")), jd_01=_sci(r["jd"].get("-0.1")), jd_05=_sci(r["jd"].get("-0.5")),
+                current_source=r.get("current_source", ""), restored=r.get("current_source") == RESTORED_SOURCE,
             )
             for r in data["rows"]
         ]

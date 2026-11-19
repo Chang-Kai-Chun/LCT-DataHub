@@ -30,6 +30,7 @@ class Section(Enum):
     JV = "jv"  # A
     DARK = "dark"  # B
     EQE = "eqe"  # C
+    NOISE = "noise"  # D
 
 
 # 各功能接受的副檔名（其他檔案上傳時略過，並在回應中列出）
@@ -37,6 +38,7 @@ ALLOWED_SUFFIXES = {
     Section.JV: frozenset({".csv"}),
     Section.DARK: frozenset({".txt", ".csv", ".dat", ".xlsx", ".xls"}),
     Section.EQE: frozenset({".txt", ".xls", ".xlsx"}),
+    Section.NOISE: frozenset({".csv"}),
 }
 
 # 工作編號：日期時間＋8 碼亂數，例如 20261106-153000-1a2b3c4d；同時用來防止路徑穿越

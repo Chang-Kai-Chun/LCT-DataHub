@@ -23,7 +23,7 @@ from lct_datahub.core.dark_current.export import write_dark_excels
 from lct_datahub.core.dark_current.integrate import accepts_upload, dark_areas, read_dark_files_with_signed
 from lct_datahub.core.dark_current.select import device_list, device_of, select_dark_curves
 from lct_datahub.core.dark_current.shift import shift_curves
-from lct_datahub.core.dark_current.extract import extract_all
+from lct_datahub.core.dark_current.extract import DarkExtract, extract_all
 from lct_datahub.core.dark_current.types import DarkCurve, ExtractBias, ShiftMode
 from lct_datahub.core.plotting import plot_dark_current
 from lct_datahub.core.sample_id import SampleId
@@ -301,6 +301,15 @@ def job_samples(store: JobStore, job: Job) -> list[str]:
     return [str(d) for d in _devices(store, job)]
 
 
+def project_extracts(store: JobStore, project: Project) -> list[DarkExtract]:
+    """專案目前 B 區工作的 B-4 擷取值（套用目前的面積與偏移）；專案沒有 B 區工作時為空清單（D、E 區使用）。"""
+    job_id = project.info.jobs.get(SECTION.value)
+    if not job_id:
+        return []
+    _, _, curves = _state(store, store.get(SECTION, job_id))
+    return extract_all(curves)
+
+
 @router.get("/jobs/{job_id}/extract", response_model=ExtractOut)
 async def get_extract(job_id: str, store: JobStore = Depends(get_store)) -> ExtractOut:
     """B-4 擷取值：每條曲線的 Rsh、A·Rsh、0／−0.1／−0.5 V 的 Jd 與 Id（有偏移時用偏移後的電壓）。"""
@@ -311,3 +320,12 @@ async def get_extract(job_id: str, store: JobStore = Depends(get_store)) -> Extr
 async def set_extract_bias(job_id: str, body: ExtractBiasIn, store: JobStore = Depends(get_store)) -> ExtractOut:
     """選擇 E 區使用的暗電流電壓（0、-0.1、-0.5 V；其他值回 422）。"""
     return await asyncio.to_thread(_set_extract_bias, store, job_id, body.bias)
+
+
+def project_dark_curves(store: JobStore, project: Project) -> list[DarkCurve]:
+    """專案目前 B 區工作的暗電流曲線（套用目前的面積與偏移）；沒有 B 區工作時為空清單（報告輸出使用）。"""
+    job_id = project.info.jobs.get(SECTION.value)
+    if not job_id:
+        return []
+    _, _, curves = _state(store, store.get(SECTION, job_id))
+    return curves

@@ -7,7 +7,7 @@
 import reflex as rx
 
 from front.components.grouping import grouping_adjust, grouping_settings
-from front.components.layout import layout, page_head
+from front.components.layout import layout, page_head, page_top
 from front.components.picker import curve_picker, plot_figure, plot_layout
 from front.components.ui import BtnVariant, btn, busy, note, panel, step_tabs, tag, text_input, upload_box
 from front.enums import EqeTab, Route
@@ -206,7 +206,7 @@ def _eqe_params() -> rx.Component:
             _range("EQE 軸", "(%)", EqeState.eqe_y_min, EqeState.eqe_y_max, EqeState.set_eqe_y_min,
                    EqeState.set_eqe_y_max, "ey"),
             _range("積分電流軸", "(mA/cm²)", EqeState.jsc_min, EqeState.jsc_max, EqeState.set_jsc_min,
-                   EqeState.set_jsc_max, "ej", hint="留空為從 0 起自動"),
+                   EqeState.set_jsc_max, "ej", hint="預設 0–32.5，留空為自動"),
             class_name="stack",
         ),
         rx.el.label(
@@ -236,8 +236,8 @@ def _rplot_params() -> rx.Component:
         _range("X 軸", "(nm)", EqeState.r_x_min, EqeState.r_x_max, EqeState.set_r_x_min,
                EqeState.set_r_x_max, "rx"),
         _range("Y 軸 SR", "(A/W)", EqeState.r_y_min, EqeState.r_y_max, EqeState.set_r_y_min,
-               EqeState.set_r_y_max, "ry", hint="留空為從 0 起自動"),
-        _buttons(EqeState.plot_rplot, EqeState.rplot_png, RPLOT_NAME, "範圍改回自動", EqeState.reset_r_range),
+               EqeState.set_r_y_max, "ry", hint="預設 0–0.6，留空為自動"),
+        _buttons(EqeState.plot_rplot, EqeState.rplot_png, RPLOT_NAME, "範圍改回預設", EqeState.reset_r_range),
         class_name="params params-grid",
     )
 
@@ -267,14 +267,16 @@ def _tab_content() -> rx.Component:
 def eqe_page() -> rx.Component:
     """EQE 頁面。"""
     return layout(
-        page_head(
-            "EQE", letter="c.",
-            meta=rx.cond(
-                EqeState.has_job,
-                rx.el.span(EqeState.pick_sample_count, " 個樣品 · ", EqeState.pick_pixel_count, " 個 pixel"),
+        page_top(
+            page_head(
+                "EQE", letter="c.",
+                meta=rx.cond(
+                    EqeState.has_job,
+                    rx.el.span(EqeState.pick_sample_count, " 個樣品 · ", EqeState.pick_pixel_count, " 個 pixel"),
+                ),
             ),
+            step_tabs(EqeState.tab, TABS, EqeState.set_tab),
         ),
-        step_tabs(EqeState.tab, TABS, EqeState.set_tab),
         rx.el.div(_tab_content(), class_name="tab-panel plot-host"),
         busy(EqeState.loading),
         wide=True,

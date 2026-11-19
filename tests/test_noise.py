@@ -364,6 +364,52 @@ def test_reference_lines():
         thermal_noise(0.0)
 
 
+# ---------- 一致性、峰值 ----------
+def test_floor_ratio_warns_when_runs_differ():
+    """n 次量測底線相差超過 5 倍：警告但仍納入；峰值為納入檔的最大 |I|。"""
+    records = [
+        _record(_white(1e-12, seed=1)),
+        _record(_white(4e-11, seed=2), source="S 2nd 0V.csv", run=2),
+    ]
+    [group] = build_groups(records)
+    assert group.n == 2 and group.floor_ratio == pytest.approx(40, rel=0.2)
+    assert "雜訊底線相差" in " ".join(group.notes)
+    assert group.peak_current == pytest.approx(max(np.max(np.abs(r.current)) for r in records))
+    [same] = build_groups([records[0], _record(_white(1e-12, seed=5), source="S 2nd 0V.csv", run=2)])
+    assert same.floor_ratio < 1.5 and "雜訊底線相差" not in " ".join(same.notes)
+
+
+# ---------- 配對（參考線） ----------
+def _extract(name: str, instrument, rsh: float = 1e9, id_01: float = 1e-10):
+    """測試用的 B-4 擷取值。"""
+    from lct_datahub.core.dark_current.extract import DarkExtract
+    from lct_datahub.core.dark_current.types import ExtractBias
+
+    ids = {b: (id_01 if b is ExtractBias.NEG_0_1 else 1e-12) for b in ExtractBias}
+    return DarkExtract(name=name, instrument=instrument, area=0.045, shift=0.0, rsh=rsh, jd={}, id=ids)
+
+
+def test_pairing_prefers_same_instrument_and_manual():
+    """名稱取底線前比對；優先同儀器，沒有才用另一台並註明；手動指定優先；偏壓不在 B-4 只有 Thermal。"""
+    from lct_datahub.core.dark_current.types import Instrument
+    from lct_datahub.core.noise.pairing import NO_PAIR, pair_group, pixel_key
+
+    assert pixel_key("G1-2_330 K") == "G1-2" and pixel_key("g6-1") == "G6-1"
+    [group] = build_groups([_record(_white(1e-12), sample="G6-1", bias=-0.1, source="G6-1 1st -0.1V.csv")])
+    pdqe, mingchi = _extract("G6-1", Instrument.PDQE, 5e8), _extract("G6-1_330 K", Instrument.MINGCHI, 3.6e8, 3.7e-10)
+    pair = pair_group(group, [pdqe, mingchi])
+    assert pair.dark is mingchi and pair.note == "" and pair.dark_current == 3.7e-10
+    assert [l.kind for l in pair.lines] == [ReferenceKind.SHOT, ReferenceKind.THERMAL, ReferenceKind.TOTAL]
+    other = pair_group(group, [pdqe])
+    assert other.dark is pdqe and "改用PD-QE" in other.note
+    assert pair_group(group, [pdqe, mingchi], {group.label: "G6-1"}).dark is pdqe
+    none = pair_group(group, [pdqe, mingchi], {group.label: NO_PAIR})
+    assert none.dark is None and none.manual and none.total is None
+    [odd] = build_groups([_record(_white(1e-12), sample="G6-1", bias=-0.2, source="G6-1 1st -0.2V.csv")])
+    thermal_only = pair_group(odd, [mingchi])
+    assert [l.kind for l in thermal_only.lines] == [ReferenceKind.THERMAL] and "只畫 Thermal" in thermal_only.note
+
+
 # ---------- 繪圖 ----------
 def test_plot_noise():
     """雙對數圖輸出 PNG；n = 0 的組不畫；對數軸下限須大於 0。"""

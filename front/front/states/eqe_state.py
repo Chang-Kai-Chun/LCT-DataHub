@@ -27,6 +27,8 @@ EQE_PLOT_NAME = "EQE.png"
 RPLOT_NAME = "R-plot.png"
 OLD_INSTRUMENT = "舊型（五樓）"  # core.eqe.types.EqeInstrument.OLD 的 value
 DEFAULT_EQE_RANGE = ("0", "100")  # EQE 軸預設 0–100（與 core.plotting.DEFAULT_EQE_RANGE 相同）
+DEFAULT_JSC_RANGE = ("0", "32.5")  # 積分電流軸預設 0–32.5（core.plotting.DEFAULT_JSC_RANGE）
+DEFAULT_RPLOT_RANGE = ("0", "0.6")  # R-plot Y 軸預設 0–0.6（core.plotting.DEFAULT_RPLOT_RANGE）
 
 
 @dataclass
@@ -76,16 +78,16 @@ class EqeState(CurvePickerMixin, GroupingMixin, SessionState):
     eqe_x_max: str = ""
     eqe_y_min: str = DEFAULT_EQE_RANGE[0]
     eqe_y_max: str = DEFAULT_EQE_RANGE[1]
-    jsc_min: str = ""
-    jsc_max: str = ""
+    jsc_min: str = DEFAULT_JSC_RANGE[0]
+    jsc_max: str = DEFAULT_JSC_RANGE[1]
     show_jsc: bool = True
     eqe_png: str = ""
 
     # c-4 R-plot
     r_x_min: str = ""
     r_x_max: str = ""
-    r_y_min: str = ""
-    r_y_max: str = ""
+    r_y_min: str = DEFAULT_RPLOT_RANGE[0]
+    r_y_max: str = DEFAULT_RPLOT_RANGE[1]
     rplot_png: str = ""
 
     range_key: int = 0  # 「範圍改回預設」時遞增，讓非受控輸入框重新掛載
@@ -187,15 +189,17 @@ class EqeState(CurvePickerMixin, GroupingMixin, SessionState):
 
     @rx.event
     def reset_eqe_range(self) -> None:
-        """EQE 圖範圍回到預設（X、積分電流自動；EQE 0–100）。"""
-        self.eqe_x_min = self.eqe_x_max = self.jsc_min = self.jsc_max = ""
+        """EQE 圖範圍回到預設（X 依數據；EQE 0–100；積分電流 0–32.5）。"""
+        self.eqe_x_min = self.eqe_x_max = ""
         self.eqe_y_min, self.eqe_y_max = DEFAULT_EQE_RANGE
+        self.jsc_min, self.jsc_max = DEFAULT_JSC_RANGE
         self.range_key += 1
 
     @rx.event
     def reset_r_range(self) -> None:
-        """R-plot 範圍回到自動。"""
-        self.r_x_min = self.r_x_max = self.r_y_min = self.r_y_max = ""
+        """R-plot 範圍回到預設（X 依數據；Y 0–0.6）。"""
+        self.r_x_min = self.r_x_max = ""
+        self.r_y_min, self.r_y_max = DEFAULT_RPLOT_RANGE
         self.range_key += 1
 
     # ---------- 工作內容 ----------

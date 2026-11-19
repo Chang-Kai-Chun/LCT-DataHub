@@ -7,7 +7,7 @@
 import reflex as rx
 
 from front.components.grouping import grouping_adjust, grouping_settings
-from front.components.layout import layout, page_head
+from front.components.layout import layout, page_head, page_top
 from front.components.picker import curve_picker, plot_figure, plot_layout
 from front.components.ui import (
     BtnVariant, btn, busy, copy_cell, dialog, dialog_actions, note, panel, segmented, step_tabs, tag, text_input,
@@ -342,6 +342,7 @@ def _extract_row(r: ExtractRow) -> rx.Component:
         copy_cell(r.jd_0),
         copy_cell(r.jd_01),
         copy_cell(r.jd_05),
+        rx.el.td(rx.cond(r.restored, tag(r.current_source, "warn"), r.current_source), class_name="small"),
     )
 
 
@@ -362,14 +363,15 @@ def _extract_tab() -> rx.Component:
                     rx.el.table(
                         rx.el.thead(rx.el.tr(
                             *[rx.el.th(h) for h in ("名稱", "偏移量 (V)", "Rsh (Ω)", "儀器 Rsh (Ω)", "A·Rsh (Ω·cm²)",
-                                                     "Jd 0 V", "Jd −0.1 V", "Jd −0.5 V")],
+                                                     "Jd 0 V", "Jd −0.1 V", "Jd −0.5 V", "電流來源")],
                         )),
                         rx.el.tbody(rx.foreach(DarkState.extract_rows, _extract_row)),
                         class_name="table compact",
                     ),
                     class_name="table-scroll", style={"max_height": "60vh"},
                 ),
-                rx.el.p("Jd 單位 A/cm²；Excel 的 Rsh_Jd sheet 另含 Id (A)。量測範圍不含該電壓時顯示 —。",
+                rx.el.p("Jd 單位 A/cm²；Excel 的 Rsh_Jd sheet 另含 Id (A)。量測範圍不含該電壓時顯示 —。"
+                        "明志 _abs 檔的電流是絕對值：有同名未取絕對值的檔就用它，沒有則以 |I| 最低點還原正負號（橘色）。",
                         class_name="small muted", style={"margin": "0"}),
                 end=[btn("下載 Excel", small=True, on_click=DarkState.download_excel, disabled=DarkState.loading)],
             ),
@@ -398,14 +400,16 @@ def _tab_content() -> rx.Component:
 def dark_page() -> rx.Component:
     """暗電流頁面。"""
     return layout(
-        page_head(
-            "暗電流", letter="b.",
-            meta=rx.cond(
-                DarkState.has_job,
-                rx.el.span(DarkState.pick_sample_count, " 個樣品 · ", DarkState.pick_pixel_count, " 個 pixel"),
+        page_top(
+            page_head(
+                "暗電流", letter="b.",
+                meta=rx.cond(
+                    DarkState.has_job,
+                    rx.el.span(DarkState.pick_sample_count, " 個樣品 · ", DarkState.pick_pixel_count, " 個 pixel"),
+                ),
             ),
+            step_tabs(DarkState.tab, TABS, DarkState.set_tab),
         ),
-        step_tabs(DarkState.tab, TABS, DarkState.set_tab),
         rx.el.div(_tab_content(), class_name="tab-panel plot-host"),
         _area_dialog(),
         _area_notice_dialog(),

@@ -119,6 +119,14 @@ class NoiseGroup:
     runs: list[np.ndarray]  # 每個納入檔的雜訊密度（與 members 同順序）
     notes: list[str] = field(default_factory=list)  # 其他提醒（偏壓不一致、設定不同已分開、次數重複…）
     split: bool = False  # 同一樣品與偏壓有不同量測設定而被分開
+    floors: list[float] = field(default_factory=list)  # 每個納入檔的白雜訊底線（與 members 同順序）
+
+    @property
+    def floor_ratio(self) -> float | None:
+        """n 次量測白雜訊底線的最大÷最小（一致性）；n < 2 時為 None。"""
+        if len(self.floors) < 2 or min(self.floors) <= 0:
+            return None
+        return max(self.floors) / min(self.floors)
 
     @property
     def n(self) -> int:
@@ -146,6 +154,11 @@ class NoiseGroup:
     def duration(self) -> float:
         """每次量測的總時間（s）。"""
         return self.points * self.interval
+
+    @property
+    def peak_current(self) -> float | None:
+        """納入檔中電流絕對值的最大值（A，主要是 60 Hz 干擾的峰值）；n 為 0 時為 None。"""
+        return max(float(np.max(np.abs(r.current))) for r in self.members) if self.members else None
 
     @property
     def label(self) -> str:

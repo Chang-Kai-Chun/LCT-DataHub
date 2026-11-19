@@ -521,3 +521,46 @@ a.sec-card:hover { border-color: var(--ink); color: var(--ink); }
 /* 點一下複製的數值格：滑過時底色提示可以點 */
 .copyable { cursor: copy; transition: background .15s var(--ease); }
 .copyable:hover { background: color-mix(in srgb, var(--orange) 18%, transparent); }
+
+/* 2026-11-19：鎖定捲動的繪圖分頁，頁首與標籤不被壓縮（e-4 大標變形） */
+.lock-scroll .page-head, .lock-scroll .tabs { flex-shrink: 0; }
+/* 表格凍結第一列（表頭）；Pixel 欄放得下完整名稱 */
+.table.sticky-head thead th { position: sticky; top: 0; z-index: 1; background: var(--bg); }
+.table .pixel-col { min-width: 9em; white-space: nowrap; }
+/* 2026-11-19：繪圖分頁的大標不縮小，與其他分頁相同（d-3、e-4 等鎖定捲動的分頁） */
+.lock-scroll .page-head .letter { font-size: 72px; }
+.lock-scroll .page-head h1 { font-size: 24px; margin-bottom: 4px; }
+/* 2026-11-19：頁首區塊（大標＋步驟標籤）在所有分頁大小、位置相同，捲動時固定在上方 */
+.page-top {
+  position: sticky; top: 0; z-index: 20; background: var(--bg);
+  display: flex; flex-direction: column; gap: 32px;
+  padding-top: 16px; margin-top: -16px;  /* 固定在上方時保留一點留白，未捲動時位置不變 */
+  flex-shrink: 0;
+}
+@media (min-width: 1101px) {
+  /* 鎖定捲動的繪圖分頁：上方留白、間距、標籤高度與一般分頁相同，大標位置不跳動 */
+  .lock-scroll .content { padding-top: 40px; gap: 32px; }
+  .lock-scroll .tab { padding-bottom: 12px; }
+}
+/* 2026-11-19（第二版）：頁首區塊固定尺寸
+   - .content 不留上方內距，改由 .page-top 自己留 40px，所以「未捲動」與「捲動後固定在上方」的位置完全相同
+   - 大標列、標籤列、整個區塊都寫死高度，任何分頁（含鎖定捲動的繪圖分頁）都一樣 */
+.content:has(> .page-top) { padding-top: 0; }
+.lock-scroll .content:has(> .page-top) { padding-top: 0; }
+.page-top {
+  box-sizing: border-box; height: 172px; padding-top: 40px; margin-top: 0;
+  gap: 0; justify-content: space-between; overflow: hidden;
+}
+.page-top .page-head { height: 64px; flex-wrap: nowrap; align-items: flex-end; }
+.page-top .page-head .letter { font-size: 72px; line-height: .8; }
+.page-top .page-head h1 { font-size: 24px; margin: 0 0 4px; }
+.page-top .page-head .meta { margin: 0 0 12px auto; }
+.page-top .tabs { height: 36px; flex-wrap: nowrap; align-items: flex-end; }
+.page-top .tab { padding-bottom: 12px; font-size: 15px; }
+/* 2026-11-19：數值格不換行（例如 Id 3.51e-11 不拆成兩行） */
+.table td.num { white-space: nowrap; }
+/* 2026-11-19：左側欄固定（整個視窗高度、不隨內容上下捲動）；深色模式按鈕緊接在選單下方 */
+@media (min-width: 1101px) {
+  .sidebar { position: sticky; top: 0; align-self: flex-start; height: 100vh; overflow: hidden; }
+}
+.sidebar .spacer { flex: 0 0 0; }

@@ -13,6 +13,7 @@ from matplotlib.figure import Figure
 from matplotlib.transforms import ScaledTranslation
 
 from lct_datahub.core.dark_current.types import DarkColumn, DarkCurve
+from lct_datahub.core.detectivity.compute import DStarKind, PixelResult
 from lct_datahub.core.eqe.types import EqeColumn, EqeCurve
 from lct_datahub.core.jv.curve import DEFAULT_Y_RANGE, CurveLine
 from lct_datahub.core.jv.types import JVParam
@@ -131,6 +132,7 @@ def plot_jv_curves(
             line.voltage, line.current_density,
             color=color_of[key], linestyle=line.style.value, linewidth=1.5, label=line.label,
         )
+    ax.margins(x=0)  # X 軸首尾＝數據範圍（2026-11-19）
     ax.set_xlabel("Voltage (V)")
     ax.set_ylabel("Current density (mA/cm²)")
     ax.set_ylim(low, high)
@@ -231,6 +233,7 @@ def plot_dark_current(
             color=colors[i % len(colors)], linewidth=1.5, label=curve.name,
         )
     ax.set_yscale("log")
+    ax.margins(x=0)  # X 軸首尾＝數據範圍（2026-11-19）
     ax.set_xlabel("Voltage (V)")
     ax.set_ylabel("|J| (A/cm²)")
     if x_range is not None:
@@ -259,6 +262,8 @@ def _check_range(name: str, rng: tuple[float, float] | None) -> None:
 EQE_SINGLE_COLOR = "#0000FF"
 JSC_SINGLE_COLOR = "#FF0000"
 DEFAULT_EQE_RANGE = (0.0, 100.0)  # EQE 軸預設範圍（%）
+DEFAULT_JSC_RANGE = (0.0, 32.5)  # 積分電流軸預設範圍（mA/cm²，2026-11-19）
+DEFAULT_RPLOT_RANGE = (0.0, 0.6)  # R-plot Y 軸預設範圍（A/W，2026-11-19）
 JSC_LINE_STYLE = "--"  # 多樣品時積分電流用虛線（EQE 用實線）
 
 
@@ -282,7 +287,7 @@ def plot_eqe(
     curves: list[EqeCurve],
     x_range: tuple[float, float] | None = None,
     eqe_range: tuple[float, float] | None = DEFAULT_EQE_RANGE,
-    jsc_range: tuple[float, float] | None = None,
+    jsc_range: tuple[float, float] | None = DEFAULT_JSC_RANGE,
     show_jsc: bool = True,
     colors: tuple[str, ...] = DEFAULT_COLORS,
 ) -> Figure:
@@ -314,6 +319,9 @@ def plot_eqe(
 
     ax.set_xlabel("Wavelength (nm)")
     ax.set_ylabel("EQE (%)")
+    ax.margins(x=0)  # X 軸首尾＝數據範圍（2026-11-19）
+    if ax_jsc is not None:
+        ax_jsc.margins(x=0)
     if x_range is not None:
         ax.set_xlim(*x_range)
     if eqe_range is not None:
@@ -345,7 +353,7 @@ def plot_eqe(
 def plot_rplot(
     curves: list[EqeCurve],
     x_range: tuple[float, float] | None = None,
-    y_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = DEFAULT_RPLOT_RANGE,
     colors: tuple[str, ...] = DEFAULT_COLORS,
 ) -> Figure:
     """C-3：畫 R-plot 疊圖，X 為波長 (nm)、Y 為 SR (A/W)；每個樣品一色。
@@ -361,6 +369,7 @@ def plot_rplot(
             curve.data[EqeColumn.WAVELENGTH.value], curve.data[EqeColumn.SR.value],
             color=colors[i % len(colors)], linewidth=1.5, label=curve.name,
         )
+    ax.margins(x=0)  # X 軸首尾＝數據範圍（2026-11-19）
     ax.set_xlabel("Wavelength (nm)")
     ax.set_ylabel("Responsivity (A/W)")
     if x_range is not None:
@@ -418,6 +427,7 @@ def plot_noise(
         )
     ax.set_xscale("log")
     ax.set_yscale("log")
+    ax.margins(x=0)  # X 軸首尾＝數據範圍（2026-11-19）
     ax.set_xlabel("Frequency (Hz)")
     ax.set_ylabel("Noise current (A/Hz$^{0.5}$)")
     if x_range is not None:
@@ -428,6 +438,93 @@ def plot_noise(
         h, l = ax.get_legend_handles_labels()
         _legend_outside(ax, h, l, 1.02)
     return fig
+
+
+@_styled
+def plot_detectivity(
+    results: list[PixelResult],
+    kind: DStarKind,
+    wavelengths: list[float] | None = None,
+    x_range: tuple[float, float] | None = None,
+    y_range: tuple[float, float] | None = None,
+    log_y: bool = True,
+    colors: tuple[str, ...] = DEFAULT_COLORS,
+) -> Figure:
+    """E 區：D*(λ) 疊圖（每個 pixel 一色）；wavelengths 為指定波長，畫灰色虛線。
+
+    不能算這一種 D* 的 pixel 不畫。y 軸預設對數（下限需大於 0）。
+    """
+    _check_range("X", x_range)
+    _check_range("Y", y_range)
+    if log_y and y_range is not None and y_range[0] <= 0:
+        raise ValueError("Y 軸為對數座標，下限必須大於 0")
+    fig, ax = _new_figure((6, 4.5))
+    drawn = [r for r in results if r.spectra.get(kind) is not None]
+    for i, result in enumerate(drawn):
+        ax.plot(result.wavelength, result.spectra[kind], color=colors[i % len(colors)], linewidth=1.5,
+                label=result.input.pixel)
+    for wl in wavelengths or []:
+        ax.axvline(wl, color="0.6", linestyle="--", linewidth=0.8)
+    if log_y:
+        ax.set_yscale("log")
+    ax.margins(x=0)  # X 軸首尾＝數據範圍（2026-11-19）
+    ax.set_xlabel("Wavelength (nm)")
+    ax.set_ylabel(f"D* {kind.value} (Jones)")
+    if x_range is not None:
+        ax.set_xlim(*x_range)
+    if y_range is not None:
+        ax.set_ylim(*y_range)
+    if drawn:
+        h, l = ax.get_legend_handles_labels()
+        _legend_outside(ax, h, l, 1.02)
+    return fig
+
+
+REPORT_FIGURE_SIZE = (6.0, 4.5)  # 報告中每張圖的尺寸（英吋），所有圖相同
+
+
+LEGEND_LOCATIONS = ("upper right", "upper left", "lower left", "lower right", "center left", "center right",
+                    "lower center", "upper center", "center")  # 圖例候選位置
+
+
+def _covered_points(fig: Figure, box) -> int:
+    """圖例方框蓋住多少個資料點（所有座標軸的曲線都算，含 twinx 右軸）。"""
+    count = 0
+    for ax in fig.axes:
+        for line in ax.get_lines():
+            points = line.get_transform().transform(line.get_xydata())
+            count += int(box.count_contains(points[np.isfinite(points).all(axis=1)]))
+    return count
+
+
+def _place_legend(fig: Figure, ax, handles, labels) -> None:
+    """把圖例放在圖內蓋到最少資料點的位置（matplotlib 的 best 只看自己那個軸，雙 y 軸會壓到另一軸的線）。"""
+    renderer = fig.canvas.get_renderer()
+    best_loc, best_count = LEGEND_LOCATIONS[0], None
+    for loc in LEGEND_LOCATIONS:
+        legend = ax.legend(handles, labels, fontsize=7, frameon=False, loc=loc)
+        count = _covered_points(fig, legend.get_window_extent(renderer))
+        if best_count is None or count < best_count:
+            best_loc, best_count = loc, count
+    ax.legend(handles, labels, fontsize=7, frameon=False, loc=best_loc)
+
+
+def figure_to_report_png(fig: Figure, dpi: int = 300) -> bytes:
+    """報告用 PNG：圖例移到圖內、固定尺寸輸出（不裁切），所以每張圖的大小與比例都相同。"""
+    fig.set_size_inches(*REPORT_FIGURE_SIZE)
+    legends = []  # 先記下原本的圖例，再拿掉
+    for ax in fig.axes:
+        legend = ax.get_legend()
+        if legend is not None:
+            legends.append((ax, legend.legend_handles, [t.get_text() for t in legend.get_texts()]))
+            legend.remove()
+    buffer = BytesIO()
+    with rc_context(FIGURE_STYLE):
+        fig.tight_layout()  # 先定好座標軸位置，圖例位置才算得準
+        for ax, handles, labels in legends:
+            _place_legend(fig, ax, handles, labels)
+        fig.savefig(buffer, format="png", dpi=dpi)
+    return buffer.getvalue()
 
 
 def figure_to_png(fig: Figure, dpi: int = 200) -> bytes:

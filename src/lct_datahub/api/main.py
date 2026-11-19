@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from lct_datahub.api.config import load_config
 from lct_datahub.api.errors import register_error_handlers
 from lct_datahub.api.jobs import JobStore
-from lct_datahub.api.routes import dark, eqe, jv, projects
+from lct_datahub.api.routes import dark, eqe, integration, jv, noise, projects, report
 
 
 def create_app(work_root: Path | None = None) -> FastAPI:
@@ -18,7 +18,7 @@ def create_app(work_root: Path | None = None) -> FastAPI:
     app = FastAPI(title="LCT DataHub API", version="0.1.0")
     app.state.store = JobStore(work_root or load_config().work_root)
     register_error_handlers(app)
-    for module in (projects, jv, dark, eqe):
+    for module in (projects, jv, dark, eqe, noise, integration, report):
         app.include_router(module.router)
 
     @app.get("/api/health", tags=["系統"])

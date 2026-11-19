@@ -40,6 +40,16 @@ def noise_density(record: NoiseRecord, definition: NoiseDefinition = NoiseDefini
     return freq, to_density(freq, amp, record.resolution, definition)
 
 
+FLOOR_BAND = (0.1, 0.5)  # 白雜訊底線的估計範圍：Nyquist 頻率的 10%～50%（5 ms 取樣時為 10～50 Hz）
+
+
+def floor_level(freq: np.ndarray, density: np.ndarray) -> float:
+    """白雜訊底線：FLOOR_BAND 範圍內的中位數（中位數不受 20、60 Hz 干擾峰影響）。"""
+    nyquist = freq[-1] if len(freq) else 0.0
+    band = (freq >= FLOOR_BAND[0] * nyquist) & (freq <= FLOOR_BAND[1] * nyquist)
+    return float(np.median(density[band])) if band.any() else float(np.median(density))
+
+
 def value_at(freq: np.ndarray, density: np.ndarray, target: float = TARGET_FREQUENCY) -> float | None:
     """最接近 target 的頻率點的值；最近的點與 target 相差超過半個頻率間隔（不在範圍內）時為 None。"""
     if len(freq) == 0:

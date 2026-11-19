@@ -28,7 +28,7 @@ USER_FILE = "user.json"
 PROJECT_FILE = "project.json"
 SETTINGS_FILE = "settings.json"  # 與 jobs.FileName.SETTINGS 相同（避免循環 import，在此另寫）
 
-SECTION_LABELS = {"jv": "A JV", "dark": "B 暗電流", "eqe": "C EQE"}  # 錯誤訊息中顯示的區名
+SECTION_LABELS = {"jv": "A JV", "dark": "B 暗電流", "eqe": "C EQE", "noise": "D Noise"}  # 錯誤訊息中顯示的區名
 NAME_MAX_LENGTH = 50
 _FORBIDDEN = re.compile(r'[\\/:*?"<>|\x00-\x1f]')  # Windows 資料夾名稱不允許的字元
 _RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}

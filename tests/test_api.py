@@ -230,6 +230,190 @@ def test_dark_upload_only_signed_files(client):
     assert res.status_code == 422
 
 
+# ---------- D Noise ----------
+NOISE_DIR = ROOT / "test_for_develop" / "Noise_test_file" / "mingchi"
+
+
+def _noise_files() -> list[Path]:
+    """明志 noise 測試檔（不含只有 FFT 結果的背景檔）。"""
+    return sorted(p for p in NOISE_DIR.iterdir() if p.suffix == ".csv" and "BACKGROUND" not in p.name.upper())
+
+
+@needs(NOISE_DIR)
+def test_noise_flow(client):
+    """上傳 → 分組平均（n=3）→ 切換定義 → 條件分組 → 畫圖 → Excel。"""
+    job = _upload(client, "noise", _noise_files()).json()
+    url = f"/api/noise/jobs/{job['job_id']}"
+    assert len(job["groups"]) == 12 and all(g["n"] == 3 for g in job["groups"])
+    assert job["settings"]["definition"] == "標準" and job["devices"] == ["G1", "G6", "G10", "G11", "G14"]
+    g12 = next(g for g in job["groups"] if g["sample"] == "G1-2" and g["bias"] == -0.1)
+    assert g12["noise_1hz"] == pytest.approx(4.59e-11, rel=0.01) and g12["peak_current"] > 1e-8
+    # 未穩定只警告、不排除
+    g11 = next(g for g in job["groups"] if g["sample"] == "G11-1" and g["bias"] == -0.1)
+    assert g11["n"] == 3 and g11["excluded"] == [] and any("電流未穩定" in n for n in g11["notes"])
+
+    inst = client.put(f"{url}/settings", json={"definition": "儀器"}).json()
+    g12_inst = next(g for g in inst["groups"] if g["name"] == g12["name"])
+    assert g12_inst["noise_1hz"] == pytest.approx(g12["noise_1hz"] * 0.3 ** 0.5, rel=1e-6)  # 1 Hz：儀器＝標準×√0.3
+    assert client.put(f"{url}/settings", json={"definition": "其他"}).status_code == 422
+
+    preview = client.post(f"{url}/grouping/preview", json={"mode": "平均分配", "names": ["A", "B"]}).json()
+    saved = client.put(f"{url}/conditions", json={"conditions": preview["conditions"]}).json()
+    assert saved["settings"]["conditions"] == preview["conditions"]
+
+    names = [g["name"] for g in job["groups"][:3]]
+    res = client.post(f"{url}/plots/noise", json={"names": names, "y_range": [1e-15, 1e-8]})
+    assert res.content.startswith(PNG_MAGIC)
+    assert client.post(f"{url}/plots/noise", json={"names": names, "y_range": [0, 1]}).status_code == 400
+    assert client.post(f"{url}/plots/noise", json={"names": ["nope"]}).status_code == 400
+    res = client.get(f"{url}/excel")
+    assert res.headers["content-type"].startswith("application/vnd.openxml")
+
+
+@needs(NOISE_DIR)
+@needs(JD_DIR)
+def test_noise_references_from_dark(client):
+    """參考線：同專案 B 區自動配對（同儀器、同偏壓）；可手動指定、不配對、回到自動。"""
+    job = _upload(client, "noise", _noise_files()).json()
+    url = f"/api/noise/jobs/{job['job_id']}"
+    before = client.get(f"{url}/references").json()
+    assert not before["has_dark"] and all(r["dark_name"] is None for r in before["rows"])
+
+    _upload(client, "dark", _files(JD_DIR))
+    refs = client.get(f"{url}/references").json()
+    rows = {r["name"]: r for r in refs["rows"]}
+    g6 = rows["G6-1 -0.1V (n=3)"]
+    # PD-QE 也有 G6-1，但 noise 是明志 → 配明志的 G6-1_330 K
+    assert g6["dark_name"] == "G6-1_330 K" and g6["dark_instrument"] == "明志" and not g6["manual"]
+    assert g6["dark_current"] == pytest.approx(4.17e-10, rel=1e-2) and g6["ratio"] > 100
+    assert g6["total"] == pytest.approx((g6["shot"] ** 2 + g6["thermal"] ** 2) ** 0.5)
+    assert rows["G1-1 0V (n=3)"]["dark_name"] is None  # B 區沒有 G1-1
+    assert "找不到" in rows["G1-1 0V (n=3)"]["note"] and rows["G1-1 0V (n=3)"]["ratio"] is None
+
+    manual = client.put(f"{url}/reference-pairs", json={"pairs": {g6["name"]: "", "G1-1 0V (n=3)": "G1-3"}}).json()
+    mrows = {r["name"]: r for r in manual["rows"]}
+    assert mrows[g6["name"]]["dark_name"] is None and mrows[g6["name"]]["manual"]
+    assert mrows["G1-1 0V (n=3)"]["dark_name"] == "G1-3"
+    back = client.put(f"{url}/reference-pairs", json={"pairs": {g6["name"]: None}}).json()
+    assert {r["name"]: r for r in back["rows"]}[g6["name"]]["dark_name"] == "G6-1_330 K"
+    assert client.put(f"{url}/reference-pairs", json={"pairs": {"nope": ""}}).status_code == 400
+    assert client.put(f"{url}/reference-pairs", json={"pairs": {g6["name"]: "nope"}}).status_code == 400
+
+    res = client.post(f"{url}/plots/noise", json={"names": [g6["name"]], "references": True})
+    assert res.content.startswith(PNG_MAGIC)
+    samples = client.get(f"{_project_url()}/samples").json()
+    assert {"G6", "G10", "G11", "G14"} <= set(samples)
+
+
+@needs(NOISE_DIR)
+def test_noise_bad_file_is_422(client):
+    """只有 FFT 結果的背景檔：422 檔案錯誤。"""
+    background = NOISE_DIR / "MINGCHI_BACKGROUND2.csv"
+    res = _upload(client, "noise", [background])
+    assert res.status_code == 422 and res.json()["kind"] == "file"
+
+
+# ---------- E PD 數據整合 ----------
+@needs(NOISE_DIR)
+@needs(JD_DIR)
+@needs(EQE_DIR)
+def test_integration_flow(client):
+    """B、C、D 上傳後：配對、設定偏壓與波長、手動配對、D*(λ) 圖、Excel。"""
+    url = f"{_project_url()}/integration"
+    empty = client.get(url).json()
+    assert empty["pixels"] == [] and empty["available"] == {"dark": False, "eqe": False, "noise": False}
+    assert empty["settings"]["bias"] == 0.0 and empty["max_wavelengths"] == 3
+
+    _upload(client, "dark", _files(JD_DIR))
+    _upload(client, "eqe", [p for p in _files(EQE_DIR) if p.suffix == ".txt"])
+    pdqe_noise = sorted(p for p in (NOISE_DIR.parent).iterdir() if p.suffix == ".csv")
+    _upload(client, "noise", _noise_files() + pdqe_noise)  # 明志＋PD-QE 的 noise 一起上傳
+    data = client.get(url).json()
+    assert data["available"] == {"dark": True, "eqe": True, "noise": True}
+    pixels = {p["pixel"]: p for p in data["pixels"]}
+    g6 = pixels["G6-1"]
+    # G6-1：暗電流與 noise 都有 PD-QE 與明志 → 自動選共有的儀器，並列出兩台候選；EQE 測試檔沒有 G6-1
+    assert {c["instrument"] for c in g6["sources"]["dark"]["candidates"]} == {"PD-QE", "明志"}
+    assert g6["sources"]["dark"]["instrument"] == g6["sources"]["noise"]["instrument"]
+    assert g6["sources"]["eqe"]["name"] is None and "沒有 EQE（C 區）" in g6["warnings"]
+    # G7-1：PD-QE 的暗電流、EQE（0 V）、noise 都有 → 實測 D* 與理論極限，實測 ≤ 理論
+    g7 = pixels["G7-1"]
+    measured, theory = g7["peaks"]["Measured"], g7["peaks"]["Shot+Thermal"]
+    assert measured is not None and theory is not None and measured["value"] < theory["value"]
+    assert g7["dark_current"] is not None and g7["noises"]["Measured"] > g7["noises"]["Shot+Thermal"]
+
+    res = client.put(f"{url}/settings", json={"bias": -0.1, "wavelengths": [700, 530]})
+    data = res.json()
+    assert data["settings"]["bias"] == -0.1 and data["settings"]["wavelengths"] == [530.0, 700.0]
+    g6 = {p["pixel"]: p for p in data["pixels"]}["G6-1"]
+    assert g6["sources"]["noise"]["name"].startswith("G6-1 -0.1V") and len(g6["at"]["Measured"]) == 2
+    assert client.put(f"{url}/settings", json={"wavelengths": [1, 2, 3, 4]}).status_code == 400
+    assert client.put(f"{url}/settings", json={"bias": -0.3}).status_code == 422
+
+    chosen = client.put(f"{url}/choices", json={"pixel": "G6-1", "source": "dark", "name": "G6-1"}).json()
+    g6 = {p["pixel"]: p for p in chosen["pixels"]}["G6-1"]
+    assert g6["sources"]["dark"]["name"] == "G6-1" and g6["sources"]["dark"]["manual"]
+    unused = client.put(f"{url}/choices", json={"pixel": "G6-1", "source": "noise", "name": ""}).json()
+    g6 = {p["pixel"]: p for p in unused["pixels"]}["G6-1"]
+    assert g6["sources"]["noise"]["name"] is None and g6["noises"]["Measured"] is None
+    back = client.put(f"{url}/choices", json={"pixel": "G6-1", "source": "noise", "name": None}).json()
+    assert {p["pixel"]: p for p in back["pixels"]}["G6-1"]["sources"]["noise"]["name"] is not None
+    assert client.put(f"{url}/choices", json={"pixel": "nope", "source": "dark", "name": ""}).status_code == 400
+    assert client.put(f"{url}/choices", json={"pixel": "G6-1", "source": "dark", "name": "x"}).status_code == 400
+
+    res = client.post(f"{url}/plot", json={"pixels": ["G6-1"], "kind": "Shot+Thermal"})
+    assert res.content.startswith(PNG_MAGIC)
+    assert client.post(f"{url}/plot", json={"pixels": ["nope"]}).status_code == 400
+    res = client.get(f"{url}/excel")
+    assert res.headers["content-type"].startswith("application/vnd.openxml")
+
+
+# ---------- G-5 報告輸出（PD） ----------
+@needs(NOISE_DIR)
+@needs(JD_DIR)
+@needs(EQE_DIR)
+def test_report_flow(client):
+    """沒有總覽分組：沒有條件；分組後每個條件預設代表 pixel；設定、元件結構圖、下載 PPT；錯誤 400。"""
+    from io import BytesIO
+
+    from pptx import Presentation
+
+    url = f"{_project_url()}/report"
+    empty = client.get(url).json()
+    assert not empty["has_grouping"] and empty["conditions"] == [] and empty["project_name"] == PROJECT
+
+    _upload(client, "dark", _files(JD_DIR))
+    _upload(client, "eqe", [p for p in _files(EQE_DIR) if p.suffix == ".txt"])
+    _upload(client, "noise", sorted(p for p in NOISE_DIR.parent.iterdir() if p.suffix == ".csv"))
+    grouping = [{"name": "Ref", "samples": "G1-G2"}, {"name": "A", "samples": "G7"}]
+    assert client.put(f"{_project_url()}/grouping", json={"conditions": grouping}).status_code == 200
+    data = client.get(url).json()
+    conds = {c["name"]: c for c in data["conditions"]}
+    assert set(conds) == {"Ref", "A"} and conds["A"]["selected"].startswith("G7-")
+    best = max((p for p in conds["Ref"]["pixels"] if p["dstar"] is not None), key=lambda p: p["dstar"])
+    assert conds["Ref"]["selected"] == best["pixel"]  # 預設 D* 最高
+
+    body = {"title": "測試報告", "recipe": "Cs0.025FA0.475", "concentration": "1.8M",
+            "selections": {"Ref": best["pixel"], "A": ""}}
+    saved = client.put(f"{url}/settings", json=body).json()
+    assert {c["name"]: c["selected"] for c in saved["conditions"]} == {"Ref": body["selections"]["Ref"], "A": ""}
+    assert client.put(f"{url}/settings", json={**body, "selections": {"Nope": ""}}).status_code == 400
+    assert client.put(f"{url}/settings", json={**body, "selections": {"Ref": "G99-9"}}).status_code == 400
+
+    png = b"\x89PNG\r\n\x1a\n" + b"0" * 10
+    assert client.post(f"{url}/image", files={"file": ("s.gif", b"x")}).status_code == 400
+    with_image = client.post(f"{url}/image", files={"file": ("structure.png", png)}).json()
+    assert with_image["has_image"]
+    assert not client.post(f"{url}/image/clear").json()["has_image"]
+
+    res = client.get(f"{url}/pptx")
+    assert res.headers["content-type"].startswith("application/vnd.openxmlformats-officedocument.presentationml")
+    prs = Presentation(BytesIO(res.content))
+    assert len(prs.slides) >= 5  # 封面、暗電流、EQE、理論 D*、實際 D*（＋Noise）
+    tables = [s.table for slide in prs.slides for s in slide.shapes if s.has_table]
+    assert all([c.text for c in t.rows[0].cells][1:] == ["Ref"] for t in tables)  # A 不列入
+
+
 # ---------- A JV ----------
 @needs(JV_DIR)
 def test_jv_flow(client):
